@@ -103,7 +103,7 @@ def = MQTTConfig
 data Will
     = Will
         { wQoS :: QoS
-        , wRetain :: QoS
+        , wRetain :: Bool
         , wTopic :: Topic
         , wMsg :: Text
         }
