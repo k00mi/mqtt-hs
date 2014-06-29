@@ -43,6 +43,7 @@ import Control.Concurrent
 import Control.Exception hiding (handle)
 import Control.Monad
 import Data.Attoparsec (parseOnly)
+import Data.Bits ((.&.))
 import Data.ByteString (hGet, ByteString)
 import qualified Data.ByteString as BS
 import Data.Foldable (for_)
@@ -347,8 +348,8 @@ getRemaining h n = go n 1
   where
     go acc fac = do
       b <- getByte h
-      let acc' = acc + b * fac
-      if b < 0x7f
+      let acc' = acc + (b .&. 127) * fac
+      if b .&. 128 == 0
         then return acc'
         else go acc' (fac * 128)
 
