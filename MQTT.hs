@@ -271,23 +271,27 @@ handshake mqtt = do
 sendConnect :: MQTT -> IO ()
 sendConnect mqtt = send mqtt connect
   where
+    conf = config mqtt
+    (willVH, willPL) = case cWill conf of
+                         Just w  -> (Just (wQoS w, wRetain w)
+                                    , Just (wTopic w, wMsg w))
+                         Nothing -> (Nothing, Nothing)
     connect = Message
                 (Header CONNECT False NoConfirm False)
                 (Just (VHConnect (ConnectHeader
                                    "MQIsdp"
                                    3
-                                   True
-                                   Nothing
-                                   False
-                                   False
-                                   (maybe 0 fromIntegral $
-                                      cKeepAlive $ config mqtt))))
+                                   (cClean conf)
+                                   willVH
+                                   (isJust $ cUsername conf)
+                                   (isJust $ cPassword conf)
+                                   (maybe 0 fromIntegral $ cKeepAlive conf))))
                 (Just (PLConnect (ConnectPL
-                                   (MqttText $ cClientID $ config mqtt)
-                                   Nothing
-                                   Nothing
-                                   Nothing
-                                   Nothing)))
+                                   (MqttText $ cClientID conf)
+                                   (fst <$> willPL)
+                                   (MqttText . snd <$> willPL)
+                                   (MqttText <$> cUsername conf)
+                                   (MqttText <$> cPassword conf))))
 
 recvLoop :: MQTT -> IO ()
 recvLoop mqtt = forever $ do
