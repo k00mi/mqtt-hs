@@ -39,16 +39,14 @@ module MQTT
 
 import Control.Applicative
 import Control.Concurrent
-import Control.Concurrent.MVar
 import Control.Exception hiding (handle)
 import Control.Monad
-import Control.Monad.Except
 import Data.Attoparsec (parseOnly)
 import Data.ByteString (hGet, ByteString)
 import qualified Data.ByteString as BS
 import Data.Foldable (for_)
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (isJust)
 import Data.Word
 import Data.Text (Text)
 import Data.Typeable (Typeable)
@@ -70,7 +68,6 @@ data MQTT
     = MQTT
         { config :: MQTTConfig
         , handle :: MVar Handle
-        , outgoing :: MVar Message
         , handlers :: MVar (M.Map MsgType [(Unique, Message -> IO ())])
         , topicHandlers :: MVar [(Topic, Topic -> ByteString -> IO ())]
         , recvThread :: MVar ThreadId
@@ -109,7 +106,6 @@ connect conf = do
     h <- connectTo (cHost conf) (PortNumber $ cPort conf)
     mqtt <- MQTT conf
               <$> newMVar h
-              <*> newEmptyMVar
               <*> newMVar M.empty
               <*> newMVar []
               <*> newEmptyMVar

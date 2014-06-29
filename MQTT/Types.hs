@@ -13,8 +13,7 @@ Types representing MQTT messages.
 module MQTT.Types where
 
 import Data.ByteString (ByteString)
-import Data.Monoid
-import Data.String
+import Data.String (IsString(..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Word

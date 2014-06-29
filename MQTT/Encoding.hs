@@ -10,7 +10,6 @@ Binary encoding for MQTT messages.
 
 module MQTT.Encoding where
 
-import Control.Monad.IO.Class
 import Data.Bits (Bits(..))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
