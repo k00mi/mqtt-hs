@@ -106,7 +106,7 @@ putPayload (PLUnsubscribe topics) = putUnsubscribePL topics
 putConnectPL :: ConnectPL -> Builder
 putConnectPL ConnectPL{..} = mconcat
     [ putMqttText clientID
-    , maybePut willTopic
+    , maybe mempty putTopic willTopic
     , maybePut willMsg
     , maybePut username
     , maybePut password

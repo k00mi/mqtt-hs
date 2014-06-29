@@ -126,7 +126,7 @@ data Payload
 data ConnectPL
     = ConnectPL
         { clientID :: MqttText
-        , willTopic :: Maybe MqttText
+        , willTopic :: Maybe Topic
         , willMsg :: Maybe MqttText
         , username :: Maybe MqttText
         , password :: Maybe MqttText

@@ -145,7 +145,7 @@ connectPL (VHConnect connHeader) = do
     fail $ "Client ID must not be longer than 23 chars: " ++ show clientID
   PLConnect <$>
     (ConnectPL clientID
-      <$> textIfSet (isJust . will)
+      <$> (fmap toTopic <$> textIfSet (isJust . will))
       <*> textIfSet (isJust . will)
       <*> textIfSet usernameFlag
       <*> textIfSet passwordFlag)
