@@ -24,6 +24,7 @@ module MQTT
   , MQTT
   , MQTTConfig(..)
   , def
+  , Will(..)
   , subscribe
   , publish
   , disconnect
@@ -80,13 +81,11 @@ data MQTTConfig
         { cHost :: HostName
         , cPort :: PortNumber
         , cClean :: Bool
-        , cWill :: Maybe (QoS, Bool)
+        , cWill :: Maybe Will
         , cUsername :: Maybe Text
         , cPassword :: Maybe Text
         , cKeepAlive :: Maybe Int
         , cClientID :: Text
-        , cWillTopic :: Maybe Text
-        , cWillMsg :: Maybe Text
         , cConnectTimeout :: Maybe Int
         , cReconnPeriod :: Maybe Int
         }
@@ -97,7 +96,18 @@ data MQTTConfig
 def :: MQTTConfig
 def = MQTTConfig
         "localhost" 1883 True Nothing Nothing Nothing Nothing
-        "mqtt-haskell" Nothing Nothing Nothing Nothing
+        "mqtt-haskell" Nothing Nothing
+
+-- | A Will message is published by the broker if a client disconnects
+-- without sending a DISCONNECT.
+data Will
+    = Will
+        { wQoS :: QoS
+        , wRetain :: QoS
+        , wTopic :: Topic
+        , wMsg :: Text
+        }
+    deriving (Eq, Show)
 
 
 -- | Establish a connection.
