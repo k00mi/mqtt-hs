@@ -20,22 +20,28 @@ A simple example, assuming a broker is running on localhost
 A message was published to "some random/topic": "Some content!"
 -}
 module MQTT
-  ( connect
+  ( -- * Creating connections
+    connect
   , MQTT
   , MQTTConfig(..)
   , def
   , Will(..)
-  , subscribe
-  , publish
   , disconnect
   , reconnect
+  -- * Subscribing and publishing
+  , subscribe
+  , publish
   , QoS(..)
   , Topic
+  , toTopic
+  , fromTopic
   , MsgType(..)
+  -- * Sending and receiving 'Message's
   , send
   , addHandler
   , removeHandler
   , awaitMsg
+  , module MQTT.Types
   ) where
 
 import Control.Applicative
@@ -132,6 +138,59 @@ send mqtt msg = do
     h <- readMVar (handle mqtt)
     writeTo h msg
 
+handshake :: MQTT -> IO (Maybe Word8)
+handshake mqtt = do
+    h <- readMVar $ handle mqtt
+    let timeout' = maybe (fmap Just) (timeout . (* 1000000))
+                     (cConnectTimeout (config mqtt))
+    sendConnect mqtt
+    msg <- timeout' (getMessage h) `catch` \e ->
+             Nothing <$ logMsg mqtt (show (e :: MQTTException) ++
+                                      " while waiting for CONNACK")
+    return $ case msg of
+      Just (ConnAck code) -> Just code
+      _ ->  Nothing
+
+sendConnect :: MQTT -> IO ()
+sendConnect mqtt = send mqtt connect
+  where
+    conf = config mqtt
+    (willVH, willPL) = case cWill conf of
+                         Just w  -> (Just (wQoS w, wRetain w)
+                                    , Just (wTopic w, wMsg w))
+                         Nothing -> (Nothing, Nothing)
+    connect = Message
+                (Header CONNECT False NoConfirm False)
+                (Just (VHConnect (ConnectHeader
+                                   "MQIsdp"
+                                   3
+                                   (cClean conf)
+                                   willVH
+                                   (isJust $ cUsername conf)
+                                   (isJust $ cPassword conf)
+                                   (maybe 0 fromIntegral $ cKeepAlive conf))))
+                (Just (PLConnect (ConnectPL
+                                   (MqttText $ cClientID conf)
+                                   (fst <$> willPL)
+                                   (MqttText . snd <$> willPL)
+                                   (MqttText <$> cUsername conf)
+                                   (MqttText <$> cPassword conf))))
+
+-- | Block until a 'Message' of the given type, optionally with the given
+-- 'MsgID', arrives.
+awaitMsg :: MQTT -> MsgType -> Maybe MsgID -> IO Message
+awaitMsg mqtt msgType mMsgID = do
+    var <- newEmptyMVar
+    handlerID <- addHandler mqtt msgType (putMVar var)
+    let wait = do
+          msg <- readMVar var
+          if isJust mMsgID
+            then if mMsgID == (varHeader msg >>= getMsgID)
+                   then removeHandler mqtt msgType handlerID >> return msg
+                   else wait
+            else removeHandler mqtt msgType handlerID >> return msg
+    wait
+
 -- | Register a callback that gets invoked whenever a 'Message' of the
 -- given 'MsgType' is received. Returns the ID of the handler which can be
 -- passed to 'removeHandler'.
@@ -195,21 +254,6 @@ publish mqtt qos retain topic body = do
                       Nothing
         void $ awaitMsg mqtt PUBCOMP (Just msgID)
 
--- | Block until a 'Message' of the given type, optionally with the given
--- 'MsgID', arrives.
-awaitMsg :: MQTT -> MsgType -> Maybe MsgID -> IO Message
-awaitMsg mqtt msgType mMsgID = do
-    var <- newEmptyMVar
-    handlerID <- addHandler mqtt msgType (putMVar var)
-    let wait = do
-          msg <- readMVar var
-          if isJust mMsgID
-            then if mMsgID == (varHeader msg >>= getMsgID)
-                   then removeHandler mqtt msgType handlerID >> return msg
-                   else wait
-            else removeHandler mqtt msgType handlerID >> return msg
-    wait
-
 -- | Close the connection to the server.
 disconnect :: MQTT -> IO ()
 disconnect mqtt = do
@@ -254,44 +298,6 @@ reconnect mqtt = for_ (cReconnPeriod $ config mqtt) $ \period -> do
 -----------------------------------------
 -- Internal
 -----------------------------------------
-
-handshake :: MQTT -> IO (Maybe Word8)
-handshake mqtt = do
-    h <- readMVar $ handle mqtt
-    let timeout' = maybe (fmap Just) (timeout . (* 1000000))
-                     (cConnectTimeout (config mqtt))
-    sendConnect mqtt
-    msg <- timeout' (getMessage h) `catch` \e ->
-             Nothing <$ logMsg mqtt (show (e :: MQTTException) ++
-                                      " while waiting for CONNACK")
-    return $ case msg of
-      Just (ConnAck code) -> Just code
-      _ ->  Nothing
-
-sendConnect :: MQTT -> IO ()
-sendConnect mqtt = send mqtt connect
-  where
-    conf = config mqtt
-    (willVH, willPL) = case cWill conf of
-                         Just w  -> (Just (wQoS w, wRetain w)
-                                    , Just (wTopic w, wMsg w))
-                         Nothing -> (Nothing, Nothing)
-    connect = Message
-                (Header CONNECT False NoConfirm False)
-                (Just (VHConnect (ConnectHeader
-                                   "MQIsdp"
-                                   3
-                                   (cClean conf)
-                                   willVH
-                                   (isJust $ cUsername conf)
-                                   (isJust $ cPassword conf)
-                                   (maybe 0 fromIntegral $ cKeepAlive conf))))
-                (Just (PLConnect (ConnectPL
-                                   (MqttText $ cClientID conf)
-                                   (fst <$> willPL)
-                                   (MqttText . snd <$> willPL)
-                                   (MqttText <$> cUsername conf)
-                                   (MqttText <$> cPassword conf))))
 
 recvLoop :: MQTT -> IO ()
 recvLoop mqtt = forever $ do
