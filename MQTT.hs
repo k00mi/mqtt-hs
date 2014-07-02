@@ -32,9 +32,6 @@ module MQTT
   , subscribe
   , publish
   , QoS(..)
-  , Topic
-  , toTopic
-  , fromTopic
   , MsgType(..)
   -- * Sending and receiving 'Message's
   , send

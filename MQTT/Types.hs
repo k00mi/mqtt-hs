@@ -10,7 +10,28 @@ Maintainer: koomi+mqtt@hackerspace-bamberg.de
 
 Types representing MQTT messages.
 -}
-module MQTT.Types where
+module MQTT.Types
+  ( Message(..)
+  , MqttHeader(..)
+  , MsgType(..)
+  , QoS(..)
+  , VarHeader(..)
+  , ConnectHeader(..)
+  , PublishHeader(..)
+  , MsgID
+  , getMsgID
+  , Payload(..)
+  , ConnectPL(..)
+  , Topic
+  , fromTopic
+  , toTopic
+  , matches
+  , MqttText(..)
+  , pattern ConnAck
+  , pattern Publish
+  , pattern PubConfirm
+  , pattern PubHandshake
+  ) where
 
 import Data.ByteString (ByteString)
 import Data.String (IsString(..))
