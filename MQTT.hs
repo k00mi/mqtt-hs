@@ -28,6 +28,7 @@ module MQTT
   , Will(..)
   , disconnect
   , reconnect
+  , onReconnect
   -- * Subscribing and publishing
   , subscribe
   , publish
@@ -44,12 +45,12 @@ module MQTT
 import Control.Applicative
 import Control.Concurrent
 import Control.Exception hiding (handle)
-import Control.Monad
+import Control.Monad hiding (sequence_)
 import Data.Attoparsec (parseOnly)
 import Data.Bits ((.&.))
 import Data.ByteString (hGet, ByteString)
 import qualified Data.ByteString as BS
-import Data.Foldable (for_)
+import Data.Foldable (for_, sequence_)
 import qualified Data.Map as M
 import Data.Maybe (isJust)
 import Data.Word
@@ -57,6 +58,7 @@ import Data.Text (Text)
 import Data.Typeable (Typeable)
 import Data.Unique
 import Network
+import Prelude hiding (sequence_)
 import System.IO (Handle, hClose, hIsEOF)
 import System.Timeout (timeout)
 
@@ -76,6 +78,7 @@ data MQTT
         , handlers :: MVar (M.Map MsgType [(Unique, Message -> IO ())])
         , topicHandlers :: MVar [(Topic, Topic -> ByteString -> IO ())]
         , recvThread :: MVar ThreadId
+        , reconnectHandler :: MVar (IO ())
         }
 
 
@@ -93,7 +96,6 @@ data MQTTConfig
         , cConnectTimeout :: Maybe Int
         , cReconnPeriod :: Maybe Int
         }
-    deriving (Eq, Show)
 
 -- | Defaults for 'MQTTConfig', connects to a server running on
 -- localhost.
@@ -122,6 +124,7 @@ connect conf = do
               <$> newMVar h
               <*> newMVar M.empty
               <*> newMVar []
+              <*> newEmptyMVar
               <*> newEmptyMVar
     mCode <- handshake mqtt
     if mCode == Just 0
@@ -263,33 +266,55 @@ disconnect mqtt = do
     readMVar (recvThread mqtt) >>= killThread
     hClose h
 
--- | Create a new connection with the same config. Does not terminate the old
--- connection.
-reconnect :: MQTT -> IO ()
-reconnect mqtt = for_ (cReconnPeriod $ config mqtt) $ \period -> do
+-- | Try creating a new connection with the same config (retrying after the
+-- specified amount of seconds has passed) and invoke 'cOnReconnect' once
+-- a new connection has been established.
+--
+-- Does not terminate the old connection.
+reconnect :: MQTT -> Int -> IO ()
+reconnect mqtt period = do
     -- Other threads can't write while the MVar is empty
     _ <- takeMVar (handle mqtt)
     logMsg mqtt "Reconnecting..."
     -- Temporarily create a new MVar for the handshake so other threads
     -- don't write before the connection is fully established
     handleVar <- newEmptyMVar
-    go period (mqtt { handle = handleVar })
+    go (mqtt { handle = handleVar })
     readMVar handleVar >>= putMVar (handle mqtt)
+    tryReadMVar (reconnectHandler mqtt) >>= sequence_
   where
     -- try reconnecting until it works
-    go p mqtt' = do
+    go mqtt' = do
         let conf = config mqtt
         connectTo (cHost conf) (PortNumber $ cPort conf)
           >>= putMVar (handle mqtt')
         logMsg mqtt' "Sending handshake"
         mCode <- handshake mqtt'
-        unless (mCode == Just 0) $
-          takeMVar (handle mqtt') >> go p mqtt'
+        unless (mCode == Just 0) $ do
+          takeMVar (handle mqtt')
+          threadDelay (period * 10^6)
+          go mqtt'
       `catch`
         \e -> do
             logMsg mqtt $ show (e :: IOException)
-            threadDelay (p * 10^6)
-            go p mqtt'
+            threadDelay (period * 10^6)
+            go mqtt'
+
+-- | Register a callback that will be invoked when a reconnect has
+-- happened.
+onReconnect :: MQTT -> IO () -> IO ()
+onReconnect mqtt io = do
+    let mvar = reconnectHandler mqtt
+    empty <- isEmptyMVar mvar
+    unless empty (void $ takeMVar mvar)
+    putMVar mvar io
+
+maybeReconnect :: MQTT -> IO ()
+maybeReconnect mqtt = do
+    catch
+      (readMVar (handle mqtt) >>= hClose)
+      (const (pure ()) :: IOException -> IO ())
+    for_ (cReconnPeriod $ config mqtt) $ reconnect mqtt
 
 
 -----------------------------------------
@@ -301,14 +326,14 @@ recvLoop mqtt = forever $ do
     h <- readMVar (handle mqtt)
     eof <- hIsEOF h
     if eof
-      then reconnect mqtt
+      then maybeReconnect mqtt
       else do
         msg <- getMessage h
         hs <- M.lookup (msgType $ header msg) <$> readMVar (handlers mqtt)
         for_ hs $ mapM_ (forkIO . ($ msg) . snd)
   `catches`
     [ Handler $ \e -> do logMsg mqtt ("Caught " ++ show (e :: IOException))
-                         reconnect mqtt
+                         maybeReconnect mqtt
     , Handler $ \e -> logMsg mqtt ("Caught " ++ show (e :: MQTTException))
     ]
 
