@@ -50,7 +50,7 @@ import Data.Attoparsec (parseOnly)
 import Data.Bits ((.&.))
 import Data.ByteString (hGet, ByteString)
 import qualified Data.ByteString as BS
-import Data.Foldable (for_, sequence_)
+import Data.Foldable (for_, sequence_, traverse_)
 import qualified Data.Map as M
 import Data.Maybe (isJust)
 import Data.Word
@@ -224,6 +224,14 @@ removeHandler mqtt msgType id = modifyMVar_ (handlers mqtt) $ \hs ->
 subscribe :: MQTT -> QoS -> Topic -> (Topic -> ByteString -> IO ())
           -> IO QoS
 subscribe mqtt qos topic handler = do
+    qosGranted <- sendSubscribe mqtt qos topic
+    modifyMVar_ (topicHandlers mqtt) $ \hs -> do
+      handlerID <- newUnique
+      return $ TopicHandler topic qosGranted handlerID handler : hs
+    return qosGranted
+
+sendSubscribe :: MQTT -> QoS -> Topic -> IO QoS
+sendSubscribe mqtt qos topic = do
     msgID <- fromIntegral . hashUnique <$> newUnique
     send mqtt $ Message
                   (Header SUBSCRIBE False Confirm False)
@@ -232,9 +240,6 @@ subscribe mqtt qos topic handler = do
     msg <- awaitMsg mqtt SUBACK (Just msgID)
     -- TODO: fail better or verify with GADT
     let Just (PLSubAck [qosGranted]) = payload msg
-    modifyMVar_ (topicHandlers mqtt) $ \hs -> do
-      handlerID <- newUnique
-      return $ TopicHandler topic qosGranted handlerID handler : hs
     return qosGranted
 
 -- | Publish a message to the given 'Topic' at the requested 'QoS' level.
@@ -289,7 +294,8 @@ reconnect mqtt period = do
     handleVar <- newEmptyMVar
     go (mqtt { handle = handleVar })
     readMVar handleVar >>= putMVar (handle mqtt)
-    tryReadMVar (reconnectHandler mqtt) >>= sequence_
+    -- forkIO so recvLoop isn't blocked
+    tryReadMVar (reconnectHandler mqtt) >>= traverse_ (void . forkIO)
   where
     -- try reconnecting until it works
     go mqtt' = do
@@ -316,6 +322,11 @@ onReconnect mqtt io = do
     empty <- isEmptyMVar mvar
     unless empty (void $ takeMVar mvar)
     putMVar mvar io
+
+resubscribe :: MQTT -> IO [QoS]
+resubscribe mqtt = do
+    ths <- readMVar (topicHandlers mqtt)
+    mapM (\th -> sendSubscribe mqtt (thQoS th) (thTopic th)) ths
 
 maybeReconnect :: MQTT -> IO ()
 maybeReconnect mqtt = do
