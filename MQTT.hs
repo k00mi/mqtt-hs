@@ -76,11 +76,18 @@ data MQTT
         { config :: MQTTConfig
         , handle :: MVar Handle
         , handlers :: MVar (M.Map MsgType [(Unique, Message -> IO ())])
-        , topicHandlers :: MVar [(Topic, Topic -> ByteString -> IO ())]
+        , topicHandlers :: MVar [TopicHandler]
         , recvThread :: MVar ThreadId
         , reconnectHandler :: MVar (IO ())
         }
 
+data TopicHandler
+    = TopicHandler
+        { thTopic :: Topic
+        , thQoS :: QoS
+        , thID :: Unique
+        , thHandler :: Topic -> ByteString -> IO ()
+        }
 
 -- | The various options when establishing a connection.
 data MQTTConfig
@@ -215,19 +222,20 @@ removeHandler mqtt msgType id = modifyMVar_ (handlers mqtt) $ \hs ->
 -- The 'Topic' passed to the callback is the fully expanded version where
 -- the message was actually published.
 subscribe :: MQTT -> QoS -> Topic -> (Topic -> ByteString -> IO ())
-          -> IO (Maybe QoS)
+          -> IO QoS
 subscribe mqtt qos topic handler = do
-    modifyMVar_ (topicHandlers mqtt) $ \hs ->
-      return $ (topic, handler) : hs
     msgID <- fromIntegral . hashUnique <$> newUnique
     send mqtt $ Message
                   (Header SUBSCRIBE False Confirm False)
                   (Just (VHOther msgID))
                   (Just (PLSubscribe [(topic, qos)]))
     msg <- awaitMsg mqtt SUBACK (Just msgID)
-    return $ do
-      PLSubAck [qosGranted] <- payload msg
-      return qosGranted
+    -- TODO: fail better or verify with GADT
+    let Just (PLSubAck [qosGranted]) = payload msg
+    modifyMVar_ (topicHandlers mqtt) $ \hs -> do
+      handlerID <- newUnique
+      return $ TopicHandler topic qosGranted handlerID handler : hs
+    return qosGranted
 
 -- | Publish a message to the given 'Topic' at the requested 'QoS' level.
 -- The payload can be any sequence of bytes, including none at all. The 'Bool'
@@ -356,8 +364,9 @@ publishHandler mqtt msg@(Publish topic body) = do
                         (Just (VHOther msgid))
                         Nothing
       _ -> return ()
-    callbacks <- filter (matches topic . fst) <$> readMVar (topicHandlers mqtt)
-    for_ callbacks $ \(_,f) -> f topic body
+    callbacks <- filter (matches topic . thTopic)
+                   <$> readMVar (topicHandlers mqtt)
+    for_ callbacks $ \th -> thHandler th topic body
 publishHandler mqtt _ = return ()
 
 logMsg :: MQTT -> String -> IO ()
