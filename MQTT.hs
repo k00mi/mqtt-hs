@@ -29,6 +29,7 @@ module MQTT
   , disconnect
   , reconnect
   , onReconnect
+  , resubscribe
   -- * Subscribing and publishing
   , subscribe
   , publish
