@@ -66,6 +66,7 @@ import System.Timeout (timeout)
 import MQTT.Types
 import MQTT.Parser
 import MQTT.Encoding
+import qualified MQTT.Logger as L
 
 -----------------------------------------
 -- Interface
@@ -103,6 +104,7 @@ data MQTTConfig
         , cClientID :: Text
         , cConnectTimeout :: Maybe Int
         , cReconnPeriod :: Maybe Int
+        , cLogger :: L.Logger
         }
 
 -- | Defaults for 'MQTTConfig', connects to a server running on
@@ -110,7 +112,7 @@ data MQTTConfig
 def :: MQTTConfig
 def = MQTTConfig
         "localhost" 1883 True Nothing Nothing Nothing Nothing
-        "mqtt-haskell" Nothing Nothing
+        "mqtt-haskell" Nothing Nothing L.stdLogger
 
 -- | A Will message is published by the broker if a client disconnects
 -- without sending a DISCONNECT.
@@ -143,17 +145,17 @@ connect conf = do
 -- | Send a 'Message' to the server.
 send :: MQTT -> Message -> IO ()
 send mqtt msg = do
+    logInfo mqtt $ "Sending " ++ show (msgType (header msg))
     h <- readMVar (handle mqtt)
     writeTo h msg
 
 handshake :: MQTT -> IO (Maybe Word8)
 handshake mqtt = do
-    h <- readMVar $ handle mqtt
     let timeout' = maybe (fmap Just) (timeout . (* 1000000))
                      (cConnectTimeout (config mqtt))
     sendConnect mqtt
-    msg <- timeout' (getMessage h) `catch` \e ->
-             Nothing <$ logMsg mqtt (show (e :: MQTTException) ++
+    msg <- timeout' (getMessage mqtt) `catch` \e ->
+             Nothing <$ logError mqtt (show (e :: MQTTException) ++
                                       " while waiting for CONNACK")
     return $ case msg of
       Just (ConnAck code) -> Just code
@@ -289,7 +291,7 @@ reconnect :: MQTT -> Int -> IO ()
 reconnect mqtt period = do
     -- Other threads can't write while the MVar is empty
     _ <- takeMVar (handle mqtt)
-    logMsg mqtt "Reconnecting..."
+    logInfo mqtt "Reconnecting..."
     -- Temporarily create a new MVar for the handshake so other threads
     -- don't write before the connection is fully established
     handleVar <- newEmptyMVar
@@ -297,13 +299,13 @@ reconnect mqtt period = do
     readMVar handleVar >>= putMVar (handle mqtt)
     -- forkIO so recvLoop isn't blocked
     tryReadMVar (reconnectHandler mqtt) >>= traverse_ (void . forkIO)
+    logInfo mqtt "Reconnect successfull"
   where
     -- try reconnecting until it works
     go mqtt' = do
         let conf = config mqtt
         connectTo (cHost conf) (PortNumber $ cPort conf)
           >>= putMVar (handle mqtt')
-        logMsg mqtt' "Sending handshake"
         mCode <- handshake mqtt'
         unless (mCode == Just 0) $ do
           takeMVar (handle mqtt')
@@ -311,7 +313,7 @@ reconnect mqtt period = do
           go mqtt'
       `catch`
         \e -> do
-            logMsg mqtt $ show (e :: IOException)
+            logWarning mqtt $ "reconnect: " ++ show (e :: IOException)
             threadDelay (period * 10^6)
             go mqtt'
 
@@ -338,6 +340,20 @@ maybeReconnect mqtt = do
 
 
 -----------------------------------------
+-- Logger utility functions
+-----------------------------------------
+
+logInfo :: MQTT -> String -> IO ()
+logInfo mqtt = L.logInfo (cLogger (config mqtt))
+
+logWarning :: MQTT -> String -> IO ()
+logWarning mqtt = L.logWarning (cLogger (config mqtt))
+
+logError :: MQTT -> String -> IO ()
+logError mqtt = L.logError (cLogger (config mqtt))
+
+
+-----------------------------------------
 -- Internal
 -----------------------------------------
 
@@ -346,15 +362,19 @@ recvLoop mqtt = forever $ do
     h <- readMVar (handle mqtt)
     eof <- hIsEOF h
     if eof
-      then maybeReconnect mqtt
+      then do
+        logError mqtt "EOF in recvLoop"
+        maybeReconnect mqtt
       else do
-        msg <- getMessage h
+        msg <- getMessage mqtt
         hs <- M.lookup (msgType $ header msg) <$> readMVar (handlers mqtt)
         for_ hs $ mapM_ (forkIO . ($ msg) . snd)
   `catches`
-    [ Handler $ \e -> do logMsg mqtt ("Caught " ++ show (e :: IOException))
-                         maybeReconnect mqtt
-    , Handler $ \e -> logMsg mqtt ("Caught " ++ show (e :: MQTTException))
+    [ Handler $ \e -> do
+        logError mqtt $ "recvLoop: Caught " ++ show (e :: IOException)
+        maybeReconnect mqtt
+    , Handler $ \e ->
+        logWarning mqtt $ "recvLoop: Caught " ++ show (e :: MQTTException)
     ]
 
 publishHandler :: MQTT -> Message -> IO ()
@@ -381,20 +401,20 @@ publishHandler mqtt msg@(Publish topic body) = do
     for_ callbacks $ \th -> thHandler th topic body
 publishHandler mqtt _ = return ()
 
-logMsg :: MQTT -> String -> IO ()
-logMsg mqtt msg = putStrLn msg
-
-getMessage :: Handle -> IO Message
-getMessage h = do
-    header <- hGet' h 1
+getMessage :: MQTT -> IO Message
+getMessage mqtt = do
+    h <- readMVar (handle mqtt)
+    headerByte <- hGet' h 1
     remaining <- getRemaining h 0
     rest <- hGet' h remaining
     let parseRslt = do
-          h <- parseOnly mqttHeader header
-          parseOnly (body h (fromIntegral remaining)) rest
+          header <- parseOnly mqttHeader headerByte
+          parseOnly (body header (fromIntegral remaining)) rest
     case parseRslt of
-      Left err -> throw (ParseError err)
-      Right msg -> return msg
+      Left err -> logError mqtt ("Error while parsing: " ++ err) >>
+                  throw (ParseError err)
+      Right msg -> msg <$
+        logInfo mqtt ("Received " ++ show (msgType (header msg)))
 
 getRemaining :: Handle -> Int -> IO Int
 getRemaining h n = go n 1
