@@ -32,6 +32,7 @@ module MQTT
   , resubscribe
   -- * Subscribing and publishing
   , subscribe
+  , unsubscribe
   , publish
   , QoS(..)
   , MsgType(..)
@@ -87,7 +88,6 @@ data TopicHandler
     = TopicHandler
         { thTopic :: Topic
         , thQoS :: QoS
-        , thID :: Unique
         , thHandler :: Topic -> ByteString -> IO ()
         }
 
@@ -228,9 +228,8 @@ subscribe :: MQTT -> QoS -> Topic -> (Topic -> ByteString -> IO ())
           -> IO QoS
 subscribe mqtt qos topic handler = do
     qosGranted <- sendSubscribe mqtt qos topic
-    modifyMVar_ (topicHandlers mqtt) $ \hs -> do
-      handlerID <- newUnique
-      return $ TopicHandler topic qosGranted handlerID handler : hs
+    modifyMVar_ (topicHandlers mqtt) $ \hs ->
+      return $ TopicHandler topic qosGranted handler : hs
     return qosGranted
 
 sendSubscribe :: MQTT -> QoS -> Topic -> IO QoS
@@ -244,6 +243,17 @@ sendSubscribe mqtt qos topic = do
     -- TODO: fail better or verify with GADT
     let Just (PLSubAck [qosGranted]) = payload msg
     return qosGranted
+
+-- | Unsubscribe from the given 'Topic' and remove any handlers.
+unsubscribe :: MQTT -> Topic -> IO ()
+unsubscribe mqtt topic = do
+    modifyMVar_ (topicHandlers mqtt) $ return . filter ((== topic) . thTopic)
+    msgID <- fromIntegral . hashUnique <$> newUnique
+    send mqtt $ Message
+                  (Header UNSUBSCRIBE False Confirm False)
+                  (Just (VHOther msgID))
+                  (Just (PLUnsubscribe [topic]))
+    void $ awaitMsg mqtt UNSUBACK (Just msgID)
 
 -- | Publish a message to the given 'Topic' at the requested 'QoS' level.
 -- The payload can be any sequence of bytes, including none at all. The 'Bool'
