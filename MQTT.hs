@@ -273,21 +273,23 @@ unsubscribe mqtt topic = do
 -- <http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#appendix-a wildcards>.
 publish :: MQTT -> QoS -> Bool -> Topic -> ByteString -> IO ()
 publish mqtt qos retain topic body = do
-    msgID <- fromIntegral . hashUnique <$> newUnique
+    msgID <- if qos > NoConfirm
+               then Just . fromIntegral . hashUnique <$> newUnique
+               else return Nothing
     send mqtt $ Message
                   (Header PUBLISH False qos retain)
-                  (Just (VHPublish (PublishHeader topic (Just msgID))))
+                  (Just (VHPublish (PublishHeader topic msgID)))
                   (Just (PLPublish body))
     case qos of
       NoConfirm -> return ()
-      Confirm   -> void $ awaitMsg mqtt PUBACK (Just msgID)
+      Confirm   -> void $ awaitMsg mqtt PUBACK msgID
       Handshake -> do
-        void $ awaitMsg mqtt PUBREC (Just msgID)
+        void $ awaitMsg mqtt PUBREC msgID
         send mqtt $ Message
                       (Header PUBREL False Confirm False)
-                      (Just (VHOther msgID))
+                      (fmap VHOther msgID)
                       Nothing
-        void $ awaitMsg mqtt PUBCOMP (Just msgID)
+        void $ awaitMsg mqtt PUBCOMP msgID
 
 -- | Close the connection to the server.
 disconnect :: MQTT -> IO ()
@@ -408,7 +410,7 @@ keepAliveLoop mqtt =
     sequence_ (loop <$> cKeepAlive (config mqtt) <*> sendSem mqtt)
   where
     loop period sem = forever $ do
-      rslt <- timeout (period * 10^6) $ waitQSem sem
+      rslt <- timeout (period * 1000000) $ waitQSem sem
       case rslt of
         Nothing -> (do send mqtt $
                         Message
