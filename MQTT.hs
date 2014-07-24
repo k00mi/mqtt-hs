@@ -46,6 +46,7 @@ module MQTT
 
 import Control.Applicative
 import Control.Concurrent
+
 import Control.Exception hiding (handle)
 import Control.Monad hiding (sequence_)
 import Data.Attoparsec (parseOnly)
@@ -57,6 +58,7 @@ import qualified Data.Map as M
 import Data.Maybe (isJust)
 import Data.Word
 import Data.Text (Text)
+import Data.Traversable (for)
 import Data.Typeable (Typeable)
 import Data.Unique
 import Network
@@ -82,6 +84,8 @@ data MQTT
         , topicHandlers :: MVar [TopicHandler]
         , recvThread :: MVar ThreadId
         , reconnectHandler :: MVar (IO ())
+        , keepAliveThread :: MVar ThreadId
+        , sendSem :: Maybe QSem
         }
 
 data TopicHandler
@@ -136,9 +140,13 @@ connect conf = do
               <*> newMVar []
               <*> newEmptyMVar
               <*> newEmptyMVar
+              <*> newEmptyMVar
+              <*> for (cKeepAlive conf) (const (newQSem 0))
     mCode <- handshake mqtt
     if mCode == Just 0
       then Just mqtt <$ do forkIO (recvLoop mqtt) >>= putMVar (recvThread mqtt)
+                           forkIO (keepAliveLoop mqtt) >>=
+                             putMVar (keepAliveThread mqtt)
                            addHandler mqtt PUBLISH (publishHandler mqtt)
       else Nothing <$ hClose h
 
@@ -148,6 +156,7 @@ send mqtt msg = do
     logInfo mqtt $ "Sending " ++ show (msgType (header msg))
     h <- readMVar (handle mqtt)
     writeTo h msg
+    for_ (sendSem mqtt) signalQSem
 
 handshake :: MQTT -> IO (Maybe Word8)
 handshake mqtt = do
@@ -290,6 +299,7 @@ disconnect mqtt = do
         Nothing
         Nothing
     readMVar (recvThread mqtt) >>= killThread
+    readMVar (keepAliveThread mqtt) >>= killThread
     hClose h
 
 -- | Try creating a new connection with the same config (retrying after the
@@ -386,6 +396,29 @@ recvLoop mqtt = forever $ do
     , Handler $ \e ->
         logWarning mqtt $ "recvLoop: Caught " ++ show (e :: MQTTException)
     ]
+
+-- | Block on a semaphore that is signaled by 'send'. If a timeout occurs
+-- while waiting, send a 'PINGREQ' to the server and wait for PINGRESP.
+-- Ignores errors that occur while writing to the handle, reconnects are
+-- initiated by 'recvLoop'.
+--
+-- Returns immediately if no Keep Alive is specified.
+keepAliveLoop :: MQTT -> IO ()
+keepAliveLoop mqtt =
+    sequence_ (loop <$> cKeepAlive (config mqtt) <*> sendSem mqtt)
+  where
+    loop period sem = forever $ do
+      rslt <- timeout (period * 10^6) $ waitQSem sem
+      case rslt of
+        Nothing -> (do send mqtt $
+                        Message
+                          (Header PINGREQ False NoConfirm False)
+                          Nothing
+                          Nothing
+                       void $ awaitMsg mqtt PINGRESP Nothing)
+                  `catch`
+                    (\e -> logError mqtt $ "keepAliveLoop: " ++ show (e :: IOException))
+        Just _ -> return ()
 
 publishHandler :: MQTT -> Message -> IO ()
 publishHandler mqtt msg@(Publish topic body) = do
