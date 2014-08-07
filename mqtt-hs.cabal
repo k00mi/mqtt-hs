@@ -17,7 +17,7 @@ build-type:          Simple
 cabal-version:       >=1.10
 
 library
-  exposed-modules:     MQTT, MQTT.Parser, MQTT.Encoding, MQTT.Types
+  exposed-modules:     MQTT, MQTT.Parser, MQTT.Encoding, MQTT.Types, MQTT.Logger
   -- other-modules:
   -- other-extensions:
   build-depends:       base >=4.7 && <4.8,
