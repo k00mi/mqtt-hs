@@ -23,13 +23,25 @@ module MQTT
   ( -- * Creating connections
     connect
   , MQTT
-  , MQTTConfig(..)
-  , def
-  , Will(..)
   , disconnect
   , reconnect
   , onReconnect
   , resubscribe
+  -- * Connection settings
+  , MQTTConfig
+  , defaultConfig
+  , cHost
+  , cPort
+  , cClean
+  , cWill
+  , cUsername
+  , cPassword
+  , cKeepAlive
+  , cClientID
+  , cConnectTimeout
+  , cReconnPeriod
+  , cLogger
+  , Will(..)
   -- * Subscribing and publishing
   , subscribe
   , unsubscribe
