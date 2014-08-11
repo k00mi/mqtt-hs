@@ -13,7 +13,7 @@ A MQTT client library.
 A simple example, assuming a broker is running on localhost
 (needs -XOverloadedStrings):
 
->>> Just mqtt <- connect def
+>>> Just mqtt <- connect defaultConfig
 >>> let f t payload = putStrLn $ "A message was published to " ++ show t ++ ": " ++ show pyload
 >>> subscribe mqtt NoConfirm "#" f
 >>> publish mqtt Handshake False "some random/topic" "Some content!"
@@ -125,10 +125,20 @@ data MQTTConfig
 
 -- | Defaults for 'MQTTConfig', connects to a server running on
 -- localhost.
-def :: MQTTConfig
-def = MQTTConfig
-        "localhost" 1883 True Nothing Nothing Nothing Nothing
-        "mqtt-haskell" Nothing Nothing L.stdLogger
+defaultConfig :: MQTTConfig
+defaultConfig = MQTTConfig
+    { cHost             = "localhost"
+    , cPort             = 1883
+    , cClean            = True
+    , cWill             = Nothing
+    , cUsername         = Nothing
+    , cPassword         = Nothing
+    , cKeepAlive        = Nothing
+    , cClientID         = "mqtt-haskell"
+    , cConnectTimeout   = Nothing
+    , cReconnPeriod     = Nothing
+    , cLogger           = L.stdLogger
+    }
 
 -- | A Will message is published by the broker if a client disconnects
 -- without sending a DISCONNECT.
