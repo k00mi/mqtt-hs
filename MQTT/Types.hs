@@ -80,6 +80,7 @@ data Connect
         , clientID :: MqttText
         , username :: Maybe MqttText
         , password :: Maybe MqttText
+        , keepAlive :: Word16
         } deriving (Show, Eq)
 
 newtype ConnAck = ConnAck { returnCode :: Word8 }
