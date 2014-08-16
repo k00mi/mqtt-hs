@@ -13,24 +13,22 @@ Types representing MQTT messages.
 module MQTT.Types
   ( Message(..)
   , MqttHeader(..)
-  , MsgType(..)
+  , MessageBody(..)
+  , Connect(..)
+  , ConnAck(..)
+  , Publish(..)
+  , Subscribe(..)
+  , SubAck(..)
+  , Unsubscribe(..)
+  , SimpleMsg(..)
   , QoS(..)
-  , VarHeader(..)
-  , ConnectHeader(..)
-  , PublishHeader(..)
   , MsgID
-  , getMsgID
-  , Payload(..)
-  , ConnectPL(..)
   , Topic
   , fromTopic
   , toTopic
   , matches
-  , MqttText(..)
-  , pattern ConnAck
-  , pattern Publish
-  , pattern PubConfirm
-  , pattern PubHandshake
+  , MqttText
+  , text
   ) where
 
 import Data.ByteString (ByteString)
@@ -38,50 +36,82 @@ import Data.String (IsString(..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Word
-import Data.String (IsString)
 
 
 data Message
     = Message
         { header :: MqttHeader
-        , varHeader :: Maybe VarHeader
-        , payload :: Maybe Payload
+        , body :: MessageBody
         }
     deriving (Eq, Show)
-
-
----------------------------------
--- * Fixed Header
----------------------------------
 
 -- | Fixed header required in every message
 data MqttHeader
     = Header
-        { msgType :: MsgType  -- ^ Type of the message
-        , dup :: Bool         -- ^ Has this message been sent before?
+        { -- msgType :: MsgType  -- ^ Type of the message
+          dup :: Bool         -- ^ Has this message been sent before?
         , qos :: QoS          -- ^ Quality of Service-level
         , retain :: Bool      -- ^ Should the broker retain the message for
                               -- future subscribers?
         }
     deriving (Eq, Ord, Show)
 
--- | The various types of commands
-data MsgType
-    = CONNECT
-    | CONNACK
-    | PUBLISH
-    | PUBACK
-    | PUBREC
-    | PUBREL
-    | PUBCOMP
-    | SUBSCRIBE
-    | SUBACK
-    | UNSUBSCRIBE
-    | UNSUBACK
-    | PINGREQ
-    | PINGRESP
-    | DISCONNECT
-    deriving (Eq, Enum, Ord, Show)
+data MessageBody
+    = MConnect Connect
+    | MConnAck ConnAck
+    | MPublish Publish
+    | MPubAck SimpleMsg
+    | MPubRec SimpleMsg
+    | MPubRel SimpleMsg
+    | MPubComp SimpleMsg
+    | MSubscribe Subscribe
+    | MSubAck SubAck
+    | MUnsubscribe Unsubscribe
+    | MUnsubAck SimpleMsg
+    | MPingReq SimpleMsg
+    | MPingResp SimpleMsg
+    | MDisconnect
+    deriving (Show, Eq)
+
+data Connect
+    = Connect
+        { cleanSession :: Bool      -- ^ Should the server reset settings
+        , will :: Maybe Will
+        , clientID :: MqttText
+        , username :: Maybe MqttText
+        , password :: Maybe MqttText
+        } deriving (Show, Eq)
+
+newtype ConnAck = ConnAck { returnCode :: Word8 }
+          deriving (Show, Eq)
+
+data Publish
+    = Publish
+        { topic :: Topic
+        , payload :: ByteString
+        , pubMsgID :: Maybe MsgID
+        } deriving (Show, Eq)
+
+data Subscribe
+    = Subscribe
+        { subTopics :: [(Topic, QoS)]
+        , subscribeMsgID :: MsgID
+        } deriving (Show, Eq)
+
+data SubAck
+    = SubAck
+        { granted :: [QoS]
+        , subAckMsgID :: MsgID
+        } deriving (Show, Eq)
+
+data Unsubscribe
+    = Unsubscribe
+        { unsubTopics :: [Topic]
+        , unsubMsgID :: MsgID
+        } deriving (Show, Eq)
+
+newtype SimpleMsg = SimpleMsg { msgID :: MsgID }
+          deriving (Show, Eq)
 
 -- | The different levels of QoS
 data QoS
@@ -90,67 +120,14 @@ data QoS
     | Handshake -- ^ Assured delivery (four-step handshake)
     deriving (Eq, Ord, Enum, Show)
 
-
----------------------------------
--- * Variable Headers
----------------------------------
-
-data VarHeader
-    = VHConnect ConnectHeader
-    | VHConnAck Word8
-    | VHPublish PublishHeader
-    | VHOther MsgID
-    deriving (Eq, Show)
-
-type MsgID = Word16
-
-getMsgID :: VarHeader -> Maybe MsgID
-getMsgID (VHPublish ph) = messageID ph
-getMsgID (VHOther id)   = Just id
-getMsgID _              = Nothing
-
-data ConnectHeader
-    = ConnectHeader
-        { protocolName :: MqttText  -- ^ Should be "MQIsdp"
-        , protocolVersion :: Word8  -- ^ Should be 3
-        , cleanSession :: Bool      -- ^ Should the server reset settings
-                                    -- after reconnects?
-        , will :: Maybe (QoS, Bool) -- ^ Will message QoS and retain flag.
-                                    -- 'Nothing' means no Will message.
-        , usernameFlag :: Bool
-        , passwordFlag :: Bool
-        , keepAlive :: Word16       -- ^ Interval in seconds in which the
-                                    -- client must send a message.
-        }
-    deriving (Eq, Show)
-
-data PublishHeader
-    = PublishHeader
-        { topic :: Topic
-        , messageID :: Maybe MsgID
-        }
-    deriving (Eq, Show)
-
-
----------------------------------
--- * Payload
----------------------------------
-
-data Payload
-    = PLConnect ConnectPL
-    | PLPublish ByteString
-    | PLSubscribe [(Topic, QoS)]
-    | PLSubAck [QoS]
-    | PLUnsubscribe [Topic]
-    deriving (Eq, Show)
-
-data ConnectPL
-    = ConnectPL
-        { clientID :: MqttText
-        , willTopic :: Maybe Topic
-        , willMsg :: Maybe MqttText
-        , username :: Maybe MqttText
-        , password :: Maybe MqttText
+-- | A Will message is published by the broker if a client disconnects
+-- without sending a DISCONNECT.
+data Will
+    = Will
+        { wQoS :: QoS
+        , wRetain :: Bool
+        , wTopic :: Topic
+        , wMsg :: Text
         }
     deriving (Eq, Show)
 
@@ -163,6 +140,8 @@ newtype MqttText = MqttText { text :: Text }
 data Topic = Topic { levels :: [Text], orig :: Text }
 -- levels and orig should always refer to the same topic, this way no text
 -- has to be copied when converting from/to text
+
+type MsgID = Word16
 
 instance Show Topic where
     show (Topic _ t) = show t
@@ -190,32 +169,3 @@ fromTopic = MqttText . orig
 instance IsString Topic where
     fromString str = let txt = T.pack str in
       Topic (T.split (== '/') txt) txt
-
-
----------------------------------
--- * Pattern Synonyms
----------------------------------
-
-pattern ConnAck code <-
-    Message
-      (Header CONNACK _ _ _)
-      (Just (VHConnAck code))
-      Nothing
-
-pattern Publish topic body <-
-    Message
-      (Header PUBLISH _ _ _)
-      (Just (VHPublish (PublishHeader topic _)))
-      (Just (PLPublish body))
-
-pattern PubConfirm msgid <-
-    Message
-      (Header PUBLISH _ Confirm _)
-      (Just (VHPublish (PublishHeader _ (Just msgid))))
-      _
-
-pattern PubHandshake msgid <-
-    Message
-      (Header PUBLISH _ Handshake _)
-      (Just (VHPublish (PublishHeader _ (Just msgid))))
-      _

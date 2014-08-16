@@ -140,17 +140,6 @@ defaultConfig = MQTTConfig
     , cLogger           = L.stdLogger
     }
 
--- | A Will message is published by the broker if a client disconnects
--- without sending a DISCONNECT.
-data Will
-    = Will
-        { wQoS :: QoS
-        , wRetain :: Bool
-        , wTopic :: Topic
-        , wMsg :: Text
-        }
-    deriving (Eq, Show)
-
 
 -- | Establish a connection.
 connect :: MQTTConfig -> IO (Maybe MQTT)
