@@ -1,4 +1,4 @@
-{-# Language RecordWildCards #-}
+{-# Language OverloadedStrings, RecordWildCards #-}
 {-|
 Module: MQTT.Encoding
 Copyright: Lukas Braun 2014
@@ -18,6 +18,7 @@ import Data.Foldable (foldMap)
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Monoid ((<>), mconcat, mempty)
+import Data.Word (Word8, Word16)
 import Data.Text.Encoding (encodeUtf8)
 import System.IO (Handle)
 
@@ -28,26 +29,24 @@ writeTo h msg = hPutBuilder h (putMessage msg)
 
 putMessage :: Message -> Builder
 putMessage Message{..} = mconcat
-    [ putMqttHeader header
+    [ putMqttHeader header (msgType body)
     , encodeRemaining remaining
-    , lazyByteString body
+    , lazyByteString bodyBS
     ]
   where
     -- the header contains the length of the remaining message, so we have
     -- to build the body to determine the length in bytes
-    body = toLazyByteString
-             (fromMaybe mempty
-               (fmap putVarHeader varHeader <> fmap putPayload payload))
-    remaining = BSL.length body
+    bodyBS = toLazyByteString (putBody body)
+    remaining = BSL.length bodyBS
 
 
 ---------------------------------
 -- * Fixed Header
 ---------------------------------
 
-putMqttHeader :: MqttHeader -> Builder
-putMqttHeader (Header msgType dup qos retain) =
-    word8 $ shiftL (fromMsgType msgType) 4 .|.
+putMqttHeader :: MqttHeader -> Word8 -> Builder
+putMqttHeader (Header dup qos retain) msgType =
+    word8 $ shiftL msgType 4 .|.
             shiftL (toBit dup) 3 .|.
             shiftL (fromQoS qos) 1 .|.
             toBit retain
@@ -62,72 +61,86 @@ encodeRemaining n =
          else word8 digit'
 
 
----------------------------------
--- * Variable Headers
----------------------------------
+putBody :: MessageBody -> Builder
+putBody (MConnect connect)          = putConnect      connect
+putBody (MConnAck connAck)          = putConnAck      connAck
+putBody (MPublish publish)          = putPublish      publish
+putBody (MPubAck simpleMsg)         = putSimple       simpleMsg
+putBody (MPubRec simpleMsg)         = putSimple       simpleMsg
+putBody (MPubRel simpleMsg)         = putSimple       simpleMsg
+putBody (MPubComp simpleMsg)        = putSimple       simpleMsg
+putBody (MSubscribe subscribe)      = putSubscribe    subscribe
+putBody (MSubAck subAck)            = putSubAck       subAck
+putBody (MUnsubscribe unsubscribe)  = putUnsubscribe  unsubscribe
+putBody (MUnsubAck simpleMsg)       = putSimple       simpleMsg
+putBody (MPingReq simpleMsg)        = putSimple       simpleMsg
+putBody (MPingResp simpleMsg)       = putSimple       simpleMsg
+putBody (MDisconnect)               = mempty
 
-putVarHeader :: VarHeader -> Builder
-putVarHeader (VHConnect connectHeader) = putConnHeader connectHeader
-putVarHeader (VHConnAck word) = word8 word
-putVarHeader (VHPublish publishHeader) = putPublishHeader publishHeader
-putVarHeader (VHOther msgID) = word16BE msgID
 
-putConnHeader :: ConnectHeader -> Builder
-putConnHeader (ConnectHeader{..}) = mconcat
-    [ putMqttText protocolName
-    , word8 protocolVersion
+putConnect :: Connect -> Builder
+putConnect Connect{..} = mconcat
+    [ putMqttText "MQIsdp" -- protocol
+    , word8 3 -- version
     , word8 flags
     , word16BE keepAlive
-    ]
-  where
-    flags = shiftL (toBit usernameFlag) 7 .|.
-            shiftL (toBit passwordFlag) 6 .|.
-            shiftL (maybe 0 (toBit . snd) will) 5 .|.
-            shiftL (maybe 0 (fromQoS . fst) will) 3 .|.
-            shiftL (toBit (isJust will)) 2 .|.
-            shiftL (toBit cleanSession) 1
-
-putPublishHeader :: PublishHeader -> Builder
-putPublishHeader PublishHeader{..} =
-    putTopic topic <> maybe mempty word16BE messageID
-
-
----------------------------------
--- * Payload
----------------------------------
-
-putPayload :: Payload -> Builder
-putPayload (PLConnect connectPL)  = putConnectPL connectPL
-putPayload (PLPublish blob)       = byteString blob
-putPayload (PLSubscribe pairs)    = putSubscribePL pairs
-putPayload (PLSubAck qoss)        = putSubAckPL qoss
-putPayload (PLUnsubscribe topics) = putUnsubscribePL topics
-
-putConnectPL :: ConnectPL -> Builder
-putConnectPL ConnectPL{..} = mconcat
-    [ putMqttText clientID
-    , maybe mempty putTopic willTopic
-    , maybePut willMsg
+    , putMqttText clientID
+    , maybe mempty putTopic (fmap wTopic will)
+    , maybePut (fmap wMsg will)
     , maybePut username
     , maybePut password
     ]
   where
     maybePut = maybe mempty putMqttText
+    flags = shiftL (toBit (isJust username)) 7 .|.
+            shiftL (toBit (isJust password)) 6 .|.
+            shiftL (maybe 0 (toBit . wRetain) will) 5 .|.
+            shiftL (maybe 0 (fromQoS . wQoS) will) 3 .|.
+            shiftL (toBit (isJust will)) 2 .|.
+            shiftL (toBit cleanSession) 1
 
-putSubscribePL :: [(Topic, QoS)] -> Builder
-putSubscribePL = foldMap $ \(txt, qos) ->
-    putTopic txt <> word8 (fromQoS qos)
 
-putSubAckPL :: [QoS] -> Builder
-putSubAckPL = foldMap (word8 . fromQoS)
+putConnAck :: ConnAck -> Builder
+putConnAck = word8 . returnCode
 
-putUnsubscribePL :: [Topic] -> Builder
-putUnsubscribePL = foldMap putTopic
+
+putPublish :: Publish -> Builder
+putPublish Publish{..} = mconcat
+    [ putTopic topic
+    , maybe mempty putMsgID pubMsgID
+    , byteString payload
+    ]
+
+
+putSubscribe :: Subscribe -> Builder
+putSubscribe Subscribe{..} = mconcat
+    [ putMsgID subscribeMsgID
+    , foldMap (\(txt, qos) -> putTopic txt <> word8 (fromQoS qos)) subTopics
+    ]
+
+
+putSubAck :: SubAck -> Builder
+putSubAck SubAck{..} = mconcat
+    [ putMsgID subAckMsgID
+    , foldMap (word8 . fromQoS) granted
+    ]
+
+putUnsubscribe :: Unsubscribe -> Builder
+putUnsubscribe Unsubscribe{..} = mconcat
+    [ putMsgID unsubMsgID
+    , foldMap putTopic unsubTopics
+    ]
+
+putSimple :: SimpleMsg -> Builder
+putSimple = putMsgID . msgID
 
 
 ---------------------------------
 -- * Utility functions
 ---------------------------------
+
+putMsgID :: Word16 -> Builder
+putMsgID = word16BE
 
 putMqttText :: MqttText -> Builder
 putMqttText (MqttText text) = let utf = encodeUtf8 text in
@@ -141,22 +154,22 @@ fromQoS NoConfirm = 0
 fromQoS Confirm   = 1
 fromQoS Handshake = 2
 
-fromMsgType :: (Num a) => MsgType -> a
-fromMsgType CONNECT     = 1
-fromMsgType CONNACK     = 2
-fromMsgType PUBLISH     = 3
-fromMsgType PUBACK      = 4
-fromMsgType PUBREC      = 5
-fromMsgType PUBREL      = 6
-fromMsgType PUBCOMP     = 7
-fromMsgType SUBSCRIBE   = 8
-fromMsgType SUBACK      = 9
-fromMsgType UNSUBSCRIBE = 10
-fromMsgType UNSUBACK    = 11
-fromMsgType PINGREQ     = 12
-fromMsgType PINGRESP    = 13
-fromMsgType DISCONNECT  = 14
-
 toBit :: (Num a) => Bool -> a
 toBit False = 0
 toBit True = 1
+
+msgType :: (Num a) => MessageBody -> a
+msgType (MConnect _)     = 1
+msgType (MConnAck _)     = 2
+msgType (MPublish _)     = 3
+msgType (MPubAck _)      = 4
+msgType (MPubRec _)      = 5
+msgType (MPubRel _)      = 6
+msgType (MPubComp _)     = 7
+msgType (MSubscribe _)   = 8
+msgType (MSubAck _)      = 9
+msgType (MUnsubscribe _) = 10
+msgType (MUnsubAck _)    = 11
+msgType (MPingReq _)     = 12
+msgType (MPingResp _)    = 13
+msgType (MDisconnect)    = 14
