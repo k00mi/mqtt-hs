@@ -95,20 +95,20 @@ data Publish
 
 data Subscribe
     = Subscribe
-        { subTopics :: [(Topic, QoS)]
-        , subscribeMsgID :: MsgID
+        { subscribeMsgID :: MsgID
+        , subTopics :: [(Topic, QoS)]
         } deriving (Show, Eq)
 
 data SubAck
     = SubAck
-        { granted :: [QoS]
-        , subAckMsgID :: MsgID
+        { subAckMsgID :: MsgID
+        , granted :: [QoS]
         } deriving (Show, Eq)
 
 data Unsubscribe
     = Unsubscribe
-        { unsubTopics :: [Topic]
-        , unsubMsgID :: MsgID
+        { unsubMsgID :: MsgID
+        , unsubTopics :: [Topic]
         } deriving (Show, Eq)
 
 newtype SimpleMsg = SimpleMsg { msgID :: MsgID }
