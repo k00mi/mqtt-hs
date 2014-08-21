@@ -28,8 +28,7 @@ module MQTT.Types
   , fromTopic
   , toTopic
   , matches
-  , MqttText
-  , text
+  , MqttText(..)
   ) where
 
 import Data.ByteString (ByteString)
