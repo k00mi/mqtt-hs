@@ -21,6 +21,7 @@ module MQTT.Types
   , SubAck(..)
   , Unsubscribe(..)
   , SimpleMsg(..)
+  , Will(..)
   , QoS(..)
   , MsgID
   , Topic
@@ -128,7 +129,7 @@ data Will
         { wQoS :: QoS
         , wRetain :: Bool
         , wTopic :: Topic
-        , wMsg :: Text
+        , wMsg :: MqttText
         }
     deriving (Eq, Show)
 
