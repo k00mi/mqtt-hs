@@ -89,8 +89,8 @@ newtype ConnAck = ConnAck { returnCode :: Word8 }
 data Publish
     = Publish
         { topic :: Topic
-        , payload :: ByteString
         , pubMsgID :: Maybe MsgID
+        , payload :: ByteString
         } deriving (Show, Eq)
 
 data Subscribe
@@ -125,8 +125,8 @@ data QoS
 -- without sending a DISCONNECT.
 data Will
     = Will
-        { wQoS :: QoS
-        , wRetain :: Bool
+        { wRetain :: Bool
+        , wQoS :: QoS
         , wTopic :: Topic
         , wMsg :: MqttText
         }
