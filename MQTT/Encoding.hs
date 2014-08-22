@@ -73,9 +73,9 @@ putBody (MSubscribe subscribe)      = putSubscribe    subscribe
 putBody (MSubAck subAck)            = putSubAck       subAck
 putBody (MUnsubscribe unsubscribe)  = putUnsubscribe  unsubscribe
 putBody (MUnsubAck simpleMsg)       = putSimple       simpleMsg
-putBody (MPingReq simpleMsg)        = putSimple       simpleMsg
-putBody (MPingResp simpleMsg)       = putSimple       simpleMsg
-putBody (MDisconnect)               = mempty
+putBody MPingReq                    = mempty
+putBody MPingResp                   = mempty
+putBody MDisconnect                 = mempty
 
 
 putConnect :: Connect -> Builder
@@ -170,6 +170,6 @@ msgType (MSubscribe _)   = 8
 msgType (MSubAck _)      = 9
 msgType (MUnsubscribe _) = 10
 msgType (MUnsubAck _)    = 11
-msgType (MPingReq _)     = 12
-msgType (MPingResp _)    = 13
-msgType (MDisconnect)    = 14
+msgType MPingReq         = 12
+msgType MPingResp        = 13
+msgType MDisconnect      = 14

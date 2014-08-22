@@ -48,8 +48,8 @@ body header msgType remaining =
             9  -> MSubAck       <$> subAck
             10 -> MUnsubscribe  <$> unsubscribe
             11 -> MUnsubAck     <$> simpleMsg
-            12 -> MPingReq      <$> simpleMsg
-            13 -> MPingResp     <$> simpleMsg
+            12 -> pure MPingReq
+            13 -> pure MPingResp
             14 -> pure MDisconnect
             t  -> lift $ fail ("Invalid message type: " ++ show t)
     in Message header <$> evalStateT parser remaining
