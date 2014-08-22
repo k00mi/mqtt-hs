@@ -30,6 +30,8 @@ module MQTT.Types
   , toTopic
   , matches
   , MqttText(..)
+  , MsgType(..)
+  , toMsgType
   ) where
 
 import Data.ByteString (ByteString)
@@ -188,3 +190,40 @@ fromTopic = MqttText . orig
 instance IsString Topic where
     fromString str = let txt = T.pack str in
       Topic (T.split (== '/') txt) txt
+
+-- | The various types of commands
+data MsgType
+    = CONNECT
+    | CONNACK
+    | PUBLISH
+    | PUBACK
+    | PUBREC
+    | PUBREL
+    | PUBCOMP
+    | SUBSCRIBE
+    | SUBACK
+    | UNSUBSCRIBE
+    | UNSUBACK
+    | PINGREQ
+    | PINGRESP
+    | DISCONNECT
+    deriving (Eq, Enum, Ord, Show)
+
+-- | Determine the 'MsgType' of a 'Message'
+toMsgType :: Message -> MsgType
+toMsgType msg =
+    case body msg of
+      MConnect _      -> CONNECT
+      MConnAck _      -> CONNACK
+      MPublish _      -> PUBLISH
+      MPubAck _       -> PUBACK
+      MPubRec _       -> PUBREC
+      MPubRel _       -> PUBREL
+      MPubComp _      -> PUBCOMP
+      MSubscribe _    -> SUBSCRIBE
+      MSubAck _       -> SUBACK
+      MUnsubscribe _  -> UNSUBSCRIBE
+      MUnsubAck _     -> UNSUBACK
+      MPingReq        -> PINGREQ
+      MPingResp       -> PINGRESP
+      MDisconnect     -> DISCONNECT
