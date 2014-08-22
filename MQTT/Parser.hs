@@ -31,10 +31,10 @@ message :: Parser Message
 message = do
     (msgType, header) <- mqttHeader
     remaining <- parseRemaining
-    body header msgType remaining
+    mqttBody header msgType remaining
 
-body :: MqttHeader -> Word8 -> Word32 -> Parser Message
-body header msgType remaining =
+mqttBody :: MqttHeader -> Word8 -> Word32 -> Parser Message
+mqttBody header msgType remaining =
     let parser =
           case msgType of
             1  -> MConnect      <$> connect
@@ -145,28 +145,28 @@ publish :: MqttHeader -> MessageParser Publish
 publish header = Publish
                   <$> getTopic
                   <*> (if qos header > NoConfirm
-                         then Just <$> getMsgID
+                         then Just <$> parseMsgID
                          else return Nothing)
                   <*> (get >>= take')
 
 subscribe :: MessageParser Subscribe
 subscribe = Subscribe
-              <$> getMsgID
+              <$> parseMsgID
               <*> whileM ((0 <) <$> get)
                     ((,) <$> getTopic <*> (anyWord8' >>= toQoS))
 
 subAck :: MessageParser SubAck
 subAck = SubAck
-          <$> getMsgID
+          <$> parseMsgID
           <*> whileM ((0 <) <$> get) (anyWord8' >>= toQoS)
 
 unsubscribe :: MessageParser Unsubscribe
 unsubscribe = Unsubscribe
-                <$> getMsgID
+                <$> parseMsgID
                 <*> whileM ((0 <) <$> get) getTopic
 
 simpleMsg :: MessageParser SimpleMsg
-simpleMsg = SimpleMsg <$> getMsgID
+simpleMsg = SimpleMsg <$> parseMsgID
 
 
 ---------------------------------
@@ -187,8 +187,8 @@ mqttText = do
       Right txt -> return $ MqttText txt
 
 -- | Synonym for 'anyWord16BE'.
-getMsgID :: MessageParser Word16
-getMsgID = anyWord16BE
+parseMsgID :: MessageParser Word16
+parseMsgID = anyWord16BE
 
 -- | Parse a big-endian 16bit integer.
 anyWord16BE :: (Num a, Bits a) => MessageParser a
