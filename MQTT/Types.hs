@@ -24,6 +24,7 @@ module MQTT.Types
   , Will(..)
   , QoS(..)
   , MsgID
+  , getMsgID
   , Topic
   , fromTopic
   , toTopic
@@ -143,6 +144,23 @@ data Topic = Topic { levels :: [Text], orig :: Text }
 -- has to be copied when converting from/to text
 
 type MsgID = Word16
+
+-- | Get the message ID of any message, if it exists.
+getMsgID :: MessageBody -> Maybe MsgID
+getMsgID (MConnect _)         = Nothing
+getMsgID (MConnAck _)         = Nothing
+getMsgID (MPublish pub)       = pubMsgID pub
+getMsgID (MPubAck simple)     = Just (msgID simple)
+getMsgID (MPubRec simple)     = Just (msgID simple)
+getMsgID (MPubRel simple)     = Just (msgID simple)
+getMsgID (MPubComp simple)    = Just (msgID simple)
+getMsgID (MSubscribe sub)     = Just (subscribeMsgID sub)
+getMsgID (MSubAck subA)       = Just (subAckMsgID subA)
+getMsgID (MUnsubscribe unsub) = Just (unsubMsgID unsub)
+getMsgID (MUnsubAck simple)   = Just (msgID simple)
+getMsgID MPingReq             = Nothing
+getMsgID MPingResp            = Nothing
+getMsgID MDisconnect          = Nothing
 
 instance Show Topic where
     show (Topic _ t) = show t
