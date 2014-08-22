@@ -68,8 +68,8 @@ data MessageBody
     | MSubAck SubAck
     | MUnsubscribe Unsubscribe
     | MUnsubAck SimpleMsg
-    | MPingReq SimpleMsg
-    | MPingResp SimpleMsg
+    | MPingReq
+    | MPingResp
     | MDisconnect
     deriving (Show, Eq)
 
