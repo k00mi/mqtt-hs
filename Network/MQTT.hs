@@ -79,7 +79,7 @@ import Data.Unique
 import Data.Word
 import Network
 import Prelude hiding (sequence_)
-import System.IO (Handle, hClose, hIsEOF)
+import System.IO (Handle, hClose, hIsEOF, hSetBinaryMode)
 import System.Timeout (timeout)
 
 import Network.MQTT.Types
@@ -171,6 +171,7 @@ defaultConfig = MQTTConfig
 connect :: MQTTConfig -> IO (Maybe MQTT)
 connect conf = do
     h <- connectTo (cHost conf) (PortNumber $ cPort conf)
+    hSetBinaryMode h True
     mqtt <- MQTT conf
               <$> newMVar h
               <*> newMVar []
