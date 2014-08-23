@@ -24,9 +24,11 @@ import System.IO (Handle)
 
 import MQTT.Types
 
+-- | Directly write a 'Message' to the buffer of a 'Handle'.
 writeTo :: Handle -> Message t -> IO ()
 writeTo h msg = hPutBuilder h (putMessage msg)
 
+-- | Generate a 'Builder' for any 'Message'.
 putMessage :: Message t -> Builder
 putMessage Message{..} = mconcat
     [ putMqttHeader header (msgType body)
@@ -44,6 +46,7 @@ putMessage Message{..} = mconcat
 -- * Fixed Header
 ---------------------------------
 
+-- | Build a 'MqttHeader' for the given message type.
 putMqttHeader :: MqttHeader -> Word8 -> Builder
 putMqttHeader (Header dup qos retain) msgType =
     word8 $ shiftL msgType 4 .|.
@@ -51,6 +54,7 @@ putMqttHeader (Header dup qos retain) msgType =
             shiftL (fromQoS qos) 1 .|.
             toBit retain
 
+-- | Encode the remaining length field.
 encodeRemaining :: Int64 -> Builder
 encodeRemaining n =
     let (n', digit) = n `quotRem` 128
@@ -61,6 +65,11 @@ encodeRemaining n =
          else word8 digit'
 
 
+---------------------------------
+-- * Body
+---------------------------------
+
+-- | Build the 'MessageBody' for any message type.
 putBody :: MessageBody t -> Builder
 putBody (MConnect connect)          = putConnect      connect
 putBody (MConnAck connAck)          = putConnAck      connAck
@@ -139,25 +148,31 @@ putSimple = putMsgID . msgID
 -- * Utility functions
 ---------------------------------
 
-putMsgID :: Word16 -> Builder
+-- | Build a 'MsgID'.
+putMsgID :: MsgID -> Builder
 putMsgID = word16BE
 
+-- | Build a length-prefixed 'MqttText'.
 putMqttText :: MqttText -> Builder
 putMqttText (MqttText text) = let utf = encodeUtf8 text in
     word16BE (fromIntegral (BS.length utf)) <> byteString utf
 
+-- | Build a 'Topic'.
 putTopic :: Topic -> Builder
 putTopic = putMqttText . fromTopic
 
+-- | Encode a 'QoS'.
 fromQoS :: (Num a) => QoS -> a
 fromQoS NoConfirm = 0
 fromQoS Confirm   = 1
 fromQoS Handshake = 2
 
+-- | Convert a 'Bool' to 0 or 1.
 toBit :: (Num a) => Bool -> a
 toBit False = 0
 toBit True = 1
 
+-- | Encode the type of a 'MessageBody'.
 msgType :: (Num a) => MessageBody t -> a
 msgType (MConnect _)     = 1
 msgType (MConnAck _)     = 2

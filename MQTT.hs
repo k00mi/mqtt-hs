@@ -16,9 +16,12 @@ A MQTT client library.
 A simple example, assuming a broker is running on localhost
 (needs -XOverloadedStrings):
 
->>> Just mqtt <- connect defaultConfig
+>>> import MQTT
+>>> import MQTT.Logger
+>>> Just mqtt <- connect defaultConfig { cLogger = warnings stdLogger }
 >>> let f t payload = putStrLn $ "A message was published to " ++ show t ++ ": " ++ show pyload
 >>> subscribe mqtt NoConfirm "#" f
+NoConfirm
 >>> publish mqtt Handshake False "some random/topic" "Some content!"
 A message was published to "some random/topic": "Some content!"
 -}
@@ -33,6 +36,7 @@ module MQTT
   -- * Connection settings
   , MQTTConfig
   , defaultConfig
+  -- ** Field accessors
   , cHost
   , cPort
   , cClean
@@ -54,6 +58,7 @@ module MQTT
   , removeHandler
   , awaitMsg
   , awaitMsg'
+  -- * Reexports
   , module MQTT.Types
   ) where
 
@@ -150,7 +155,8 @@ defaultConfig = MQTTConfig
     }
 
 
--- | Establish a connection.
+-- | Establish a connection. This might fail with an 'IOException' or
+-- return 'Nothing' if the server did not accept the connection.
 connect :: MQTTConfig -> IO (Maybe MQTT)
 connect conf = do
     h <- connectTo (cHost conf) (PortNumber $ cPort conf)
@@ -206,6 +212,10 @@ sendConnect mqtt = send mqtt connect
 
 -- | Block until a 'Message' of the given type, optionally with the given
 -- 'MsgID', arrives.
+--
+-- Note this expects a singleton to guarantee the returned 'Message' is of
+-- the 'MsgType' that is being waited for. Singleton constructors are the
+-- 'MsgType' constructors prefixed with a capital @S@, e.g. 'SPUBLISH'.
 awaitMsg :: SingI t => MQTT -> SMsgType t -> Maybe MsgID -> IO (Message t)
 awaitMsg mqtt _ mMsgID = do
     var <- newEmptyMVar
@@ -219,8 +229,8 @@ awaitMsg mqtt _ mMsgID = do
             else removeHandler mqtt handlerID >> return msg
     wait
 
--- | A version of 'awaitMsg' that infers the 'MsgType' that should be
--- waited for.
+-- | A version of 'awaitMsg' that infers the type of the 'Message' that
+-- is expected.
 awaitMsg' :: SingI t => MQTT -> Maybe MsgID -> IO (Message t)
 awaitMsg' mqtt mMsgID = awaitMsg mqtt sing mMsgID
 
@@ -317,8 +327,8 @@ disconnect mqtt = do
     hClose h
 
 -- | Try creating a new connection with the same config (retrying after the
--- specified amount of seconds has passed) and invoke 'cOnReconnect' once
--- a new connection has been established.
+-- specified amount of seconds has passed) and invoke the callback that is
+-- set with 'onReconnect' once a new connection has been established.
 --
 -- Does not terminate the old connection.
 reconnect :: MQTT -> Int -> IO ()
@@ -360,6 +370,7 @@ onReconnect mqtt io = do
     unless empty (void $ takeMVar mvar)
     putMVar mvar io
 
+-- | Resubscribe to all topics. Returns the new list of granted 'QoS'.
 resubscribe :: MQTT -> IO [QoS]
 resubscribe mqtt = do
     ths <- readMVar (topicHandlers mqtt)

@@ -17,9 +17,11 @@ Maintainer: koomi+mqtt@hackerspace-bamberg.de
 Types representing MQTT messages.
 -}
 module MQTT.Types
-  ( Message(..)
+  ( -- * Messages
+    Message(..)
   , SomeMessage(..)
   , MqttHeader(..)
+  -- * Message bodies
   , MessageBody(..)
   , Connect(..)
   , ConnAck(..)
@@ -28,6 +30,7 @@ module MQTT.Types
   , SubAck(..)
   , Unsubscribe(..)
   , SimpleMsg(..)
+  -- * Miscellaneous
   , Will(..)
   , QoS(..)
   , MsgID
@@ -37,9 +40,17 @@ module MQTT.Types
   , toTopic
   , matches
   , MqttText(..)
+  -- * Message types
   , MsgType(..)
   , toMsgType
   , toMsgType'
+  -- ** Singletons
+  -- | Singletons are used to build a bridge between the type and value level.
+  -- See the @singletons@ package for more information.
+  --
+  -- You do not have to use or understand these in order to use this
+  -- library, they are mostly used internally to get better guarantees
+  -- about the flow of 'Message's.
   , toSMsgType
   , SMsgType(..)
   , Sing( SCONNECT
@@ -65,16 +76,18 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Word
 
+-- | A MQTT message, indexed by the type of the message ('MsgType').
 data Message (t :: MsgType)
     = Message
         { header :: MqttHeader
         , body :: MessageBody t
         }
 
+-- | Any message, hiding the index.
 data SomeMessage where
     SomeMessage :: Message t -> SomeMessage
 
--- | Fixed header required in every message
+-- | Fixed header required in every message.
 data MqttHeader
     = Header
         { -- msgType :: MsgType  -- ^ Type of the message
@@ -85,6 +98,7 @@ data MqttHeader
         }
     deriving (Eq, Ord, Show)
 
+-- | The body of a MQTT message, indexed by the type of the message ('MsgType').
 data MessageBody (t :: MsgType) where
     MConnect      :: Connect      -> MessageBody CONNECT
     MConnAck      :: ConnAck      -> MessageBody CONNACK
@@ -101,44 +115,68 @@ data MessageBody (t :: MsgType) where
     MPingResp     ::                 MessageBody PINGRESP
     MDisconnect   ::                 MessageBody DISCONNECT
 
+-- | The fields of a CONNECT message.
 data Connect
     = Connect
-        { cleanSession :: Bool      -- ^ Should the server reset settings
+        { cleanSession :: Bool
+        -- ^ Should the server forget subscriptions and other state on
+        -- disconnects?
         , will :: Maybe Will
+        -- ^ Optional 'Will' message.
         , clientID :: MqttText
+        -- ^ Client ID used by the server to identify clients.
         , username :: Maybe MqttText
+        -- ^ Optional username used for authentication.
         , password :: Maybe MqttText
+        -- ^ Optional password used for authentication.
         , keepAlive :: Word16
+        -- ^ Maximum interval (in seconds) in which a message must be sent.
+        -- 0 means no limit.
         } deriving (Show, Eq)
 
+-- | The response to a CONNECT. Anything other than 0 means the broker
+-- refused the connection
+-- (<http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#connack details>).
 newtype ConnAck = ConnAck { returnCode :: Word8 }
           deriving (Show, Eq)
 
+-- | The fields of a PUBLISH message.
 data Publish
     = Publish
         { topic :: Topic
+        -- ^ The 'Topic' to which the message should be published.
         , pubMsgID :: Maybe MsgID
+        -- ^ 'MsgID' of the message if 'QoS' > 'NoConfirm'.
         , payload :: ByteString
+        -- ^ The content that will be published.
         } deriving (Show, Eq)
 
+-- | The fields of a SUBSCRIBE message.
 data Subscribe
     = Subscribe
         { subscribeMsgID :: MsgID
         , subTopics :: [(Topic, QoS)]
+        -- ^ The 'Topic's and corresponding requested 'QoS'.
         } deriving (Show, Eq)
 
+-- | The fields of a SUBACK message.
 data SubAck
     = SubAck
         { subAckMsgID :: MsgID
         , granted :: [QoS]
+        -- ^ The 'QoS' granted for each 'Topic' in the order they were sent
+        -- in the SUBSCRIBE.
         } deriving (Show, Eq)
 
+-- | The fields of a UNSUBSCRIBE message.
 data Unsubscribe
     = Unsubscribe
         { unsubMsgID :: MsgID
         , unsubTopics :: [Topic]
+        -- ^ The 'Topic's from which the client should be unsubscribed.
         } deriving (Show, Eq)
 
+-- | Any message body that consists only of a 'MsgID'.
 newtype SimpleMsg = SimpleMsg { msgID :: MsgID }
           deriving (Show, Eq)
 
@@ -166,6 +204,10 @@ newtype MqttText = MqttText { text :: Text }
 
 -- | A topic is a "hierarchical name space that defines a taxonomy of
 -- information sources for which subscribers can register an interest."
+--
+-- See
+-- <http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#appendix-a here>
+-- for more information on topics.
 data Topic = Topic { levels :: [Text], orig :: Text }
 -- levels and orig should always refer to the same topic, this way no text
 -- has to be copied when converting from/to text
@@ -216,7 +258,7 @@ instance IsString Topic where
     fromString str = let txt = T.pack str in
       Topic (T.split (== '/') txt) txt
 
--- | The various types of commands
+-- | The various types of messages.
 data MsgType
     = CONNECT
     | CONNACK
@@ -256,6 +298,7 @@ toMsgType msg =
       MPingResp       -> PINGRESP
       MDisconnect     -> DISCONNECT
 
+-- | Determine the 'MsgType' of a 'SomeMessage'.
 toMsgType' :: SomeMessage -> MsgType
 toMsgType' (SomeMessage msg) = toMsgType msg
 

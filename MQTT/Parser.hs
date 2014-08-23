@@ -35,26 +35,6 @@ message = do
     withSomeSing msgType $ \sMsgType ->
       SomeMessage . Message header <$> mqttBody header sMsgType remaining
 
-mqttBody :: MqttHeader -> SMsgType t -> Word32 -> Parser (MessageBody t)
-mqttBody header msgType remaining =
-    let parser =
-          case msgType of
-            SCONNECT     -> MConnect     <$> connect
-            SCONNACK     -> MConnAck     <$> connAck
-            SPUBLISH     -> MPublish     <$> publish header
-            SPUBACK      -> MPubAck      <$> simpleMsg
-            SPUBREC      -> MPubRec      <$> simpleMsg
-            SPUBREL      -> MPubRel      <$> simpleMsg
-            SPUBCOMP     -> MPubComp     <$> simpleMsg
-            SSUBSCRIBE   -> MSubscribe   <$> subscribe
-            SSUBACK      -> MSubAck      <$> subAck
-            SUNSUBSCRIBE -> MUnsubscribe <$> unsubscribe
-            SUNSUBACK    -> MUnsubAck    <$> simpleMsg
-            SPINGREQ     -> pure MPingReq
-            SPINGRESP    -> pure MPingResp
-            SDISCONNECT  -> pure MDisconnect
-    in evalStateT parser remaining
-
 
 ---------------------------------
 -- * Fixed Header
@@ -101,8 +81,30 @@ parseRemaining = do
 
 
 ---------------------------------
--- * Variable Headers
+-- * Message Body
 ---------------------------------
+
+-- | «@mqttBody header msgtype remaining@» parses a 'Message' of type
+-- @msgtype@ that is @remaining@ bytes long.
+mqttBody :: MqttHeader -> SMsgType t -> Word32 -> Parser (MessageBody t)
+mqttBody header msgType remaining =
+    let parser =
+          case msgType of
+            SCONNECT     -> MConnect     <$> connect
+            SCONNACK     -> MConnAck     <$> connAck
+            SPUBLISH     -> MPublish     <$> publish header
+            SPUBACK      -> MPubAck      <$> simpleMsg
+            SPUBREC      -> MPubRec      <$> simpleMsg
+            SPUBREL      -> MPubRel      <$> simpleMsg
+            SPUBCOMP     -> MPubComp     <$> simpleMsg
+            SSUBSCRIBE   -> MSubscribe   <$> subscribe
+            SSUBACK      -> MSubAck      <$> subAck
+            SUNSUBSCRIBE -> MUnsubscribe <$> unsubscribe
+            SUNSUBACK    -> MUnsubAck    <$> simpleMsg
+            SPINGREQ     -> pure MPingReq
+            SPINGRESP    -> pure MPingResp
+            SDISCONNECT  -> pure MDisconnect
+    in evalStateT parser remaining
 
 connect :: MessageParser Connect
 connect = do
@@ -225,7 +227,7 @@ take' :: Word32 -> MessageParser BS.ByteString
 take' n = parseLength n >> lift (take (fromIntegral n))
 
 -- | Subtract 'n' from the remaining length or 'fail' if there is not
--- enough left.
+-- enough input left.
 parseLength :: Word32 -> MessageParser ()
 parseLength n = do
     rem <- get
@@ -233,8 +235,7 @@ parseLength n = do
       then fail "Reached remaining = 0 before end of message."
       else put $ rem - n
 
--- | Convert a number to a 'QoS'. Calls 'fail' if the number can't be
--- converted.
+-- | Convert a number to a 'QoS'. 'fail' if the number can't be converted.
 toQoS :: (Num a, Eq a, Show a, Monad m) => a -> m QoS
 toQoS 0 = return NoConfirm
 toQoS 1 = return Confirm
