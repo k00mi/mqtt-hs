@@ -121,16 +121,31 @@ data MessageHandler where
 data MQTTConfig
     = MQTTConfig
         { cHost :: HostName
+        -- ^ Hostname of the broker.
         , cPort :: PortNumber
+        -- ^ Port of the broker.
         , cClean :: Bool
+        -- ^ Should the server forget subscriptions and other state on
+        -- disconnects?
         , cWill :: Maybe Will
+        -- ^ Optional 'Will' message.
         , cUsername :: Maybe Text
+        -- ^ Optional username used for authentication.
         , cPassword :: Maybe Text
+        -- ^ Optional password used for authentication.
         , cKeepAlive :: Maybe Int
+        -- ^ Maximum interval (in seconds) in which a message must be sent.
+        -- 0 means no limit.
         , cClientID :: Text
+        -- ^ Client ID used by the server to identify clients.
         , cConnectTimeout :: Maybe Int
+        -- ^ Time in seconds after which waiting for a CONNACK is aborted.
+        -- 'Nothing' means no timeout.
         , cReconnPeriod :: Maybe Int
+        -- ^ Time in seconds to wait between reconnect attempts.
+        -- 'Nothing' means no reconnects are attempted.
         , cLogger :: L.Logger
+        -- ^ Functions for logging, see 'Network.MQTT.Logger.Logger'.
         }
 
 -- | Defaults for 'MQTTConfig', connects to a server running on
