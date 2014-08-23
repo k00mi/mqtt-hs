@@ -68,6 +68,7 @@ import qualified Data.ByteString as BS
 import Data.Foldable (for_, sequence_, traverse_)
 import qualified Data.Map as M
 import Data.Maybe (isJust, fromJust)
+import Data.Singletons (withSomeSing, fromSing)
 import Data.Singletons.Decide
 import Data.Text (Text)
 import Data.Traversable (for)
@@ -463,7 +464,11 @@ getMessage mqtt = do
     rest <- hGet' h remaining
     let parseRslt = do
           (mType, header) <- parseOnly mqttHeader headerByte
-          parseOnly (mqttBody header mType (fromIntegral remaining)) rest
+          withSomeSing mType $ \sMsgType ->
+            parseOnly
+              (SomeMessage . Message header
+                <$> mqttBody header sMsgType (fromIntegral remaining))
+              rest
     case parseRslt of
       Left err -> logError mqtt ("Error while parsing: " ++ err) >>
                   throw (ParseError err)

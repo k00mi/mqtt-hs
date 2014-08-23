@@ -1,4 +1,4 @@
-{-# Language OverloadedStrings #-}
+{-# Language OverloadedStrings, GADTs #-}
 {-|
 Module: MQTT.Parsers
 Copyright: Lukas Braun 2014
@@ -17,6 +17,7 @@ import Data.Attoparsec.ByteString
 import Data.Bits
 import Data.Maybe (isJust)
 import qualified Data.ByteString as BS
+import Data.Singletons (withSomeSing)
 import Data.Text.Encoding (decodeUtf8')
 import Data.Word
 import Prelude hiding (takeWhile, take)
@@ -31,27 +32,27 @@ message :: Parser SomeMessage
 message = do
     (msgType, header) <- mqttHeader
     remaining <- parseRemaining
-    mqttBody header msgType remaining
+    withSomeSing msgType $ \sMsgType ->
+      SomeMessage . Message header <$> mqttBody header sMsgType remaining
 
-mqttBody :: MqttHeader -> Word8 -> Word32 -> Parser SomeMessage
+mqttBody :: MqttHeader -> SMsgType t -> Word32 -> Parser (MessageBody t)
 mqttBody header msgType remaining =
     let parser =
           case msgType of
-            1  -> SomeMessage . Message header . MConnect     <$> connect
-            2  -> SomeMessage . Message header . MConnAck     <$> connAck
-            3  -> SomeMessage . Message header . MPublish     <$> publish header
-            4  -> SomeMessage . Message header . MPubAck      <$> simpleMsg
-            5  -> SomeMessage . Message header . MPubRec      <$> simpleMsg
-            6  -> SomeMessage . Message header . MPubRel      <$> simpleMsg
-            7  -> SomeMessage . Message header . MPubComp     <$> simpleMsg
-            8  -> SomeMessage . Message header . MSubscribe   <$> subscribe
-            9  -> SomeMessage . Message header . MSubAck      <$> subAck
-            10 -> SomeMessage . Message header . MUnsubscribe <$> unsubscribe
-            11 -> SomeMessage . Message header . MUnsubAck    <$> simpleMsg
-            12 -> pure $ SomeMessage (Message header MPingReq)
-            13 -> pure $ SomeMessage (Message header MPingResp)
-            14 -> pure $ SomeMessage (Message header MDisconnect)
-            t  -> lift $ fail ("Invalid message type: " ++ show t)
+            SCONNECT     -> MConnect     <$> connect
+            SCONNACK     -> MConnAck     <$> connAck
+            SPUBLISH     -> MPublish     <$> publish header
+            SPUBACK      -> MPubAck      <$> simpleMsg
+            SPUBREC      -> MPubRec      <$> simpleMsg
+            SPUBREL      -> MPubRel      <$> simpleMsg
+            SPUBCOMP     -> MPubComp     <$> simpleMsg
+            SSUBSCRIBE   -> MSubscribe   <$> subscribe
+            SSUBACK      -> MSubAck      <$> subAck
+            SUNSUBSCRIBE -> MUnsubscribe <$> unsubscribe
+            SUNSUBACK    -> MUnsubAck    <$> simpleMsg
+            SPINGREQ     -> pure MPingReq
+            SPINGRESP    -> pure MPingResp
+            SDISCONNECT  -> pure MDisconnect
     in evalStateT parser remaining
 
 
@@ -60,14 +61,30 @@ mqttBody header msgType remaining =
 ---------------------------------
 
 -- | Parser for the fixed header part of a MQTT message.
-mqttHeader :: Parser (Word8, MqttHeader)
+mqttHeader :: Parser (MsgType, MqttHeader)
 mqttHeader = do
     byte1 <- anyWord8
     qos <- toQoS $ 3 .&. shiftR byte1 1
     let retain = testBit byte1 0
         dup = testBit byte1 3
         msgType = shiftR byte1 4
-    return (msgType, Header dup qos retain)
+    msgType' <- case msgType of
+                  1  -> return CONNECT
+                  2  -> return CONNACK
+                  3  -> return PUBLISH
+                  4  -> return PUBACK
+                  5  -> return PUBREC
+                  6  -> return PUBREL
+                  7  -> return PUBCOMP
+                  8  -> return SUBSCRIBE
+                  9  -> return SUBACK
+                  10 -> return UNSUBSCRIBE
+                  11 -> return UNSUBACK
+                  12 -> return PINGREQ
+                  13 -> return PINGRESP
+                  14 -> return DISCONNECT
+                  x  -> fail $ "Invalid message type: " ++ show x
+    return (msgType', Header dup qos retain)
 
 -- | Parse the 'remaining length' field that indicates how long the rest of
 -- the message is.
