@@ -53,6 +53,7 @@ module MQTT
   , addHandler
   , removeHandler
   , awaitMsg
+  , awaitMsg'
   , module MQTT.Types
   ) where
 
@@ -68,7 +69,7 @@ import qualified Data.ByteString as BS
 import Data.Foldable (for_, sequence_, traverse_)
 import qualified Data.Map as M
 import Data.Maybe (isJust, fromJust)
-import Data.Singletons (withSomeSing, fromSing)
+import Data.Singletons (withSomeSing, fromSing, SingI(..))
 import Data.Singletons.Decide
 import Data.Text (Text)
 import Data.Traversable (for)
@@ -110,8 +111,8 @@ data TopicHandler
         }
 
 data MessageHandler where
-    MessageHandler :: Unique
-                   -> SMsgType t
+    MessageHandler :: SingI t
+                   => Unique
                    -> (Message t -> IO ())
                    -> MessageHandler
 
@@ -166,7 +167,7 @@ connect conf = do
       then Just mqtt <$ do forkIO (recvLoop mqtt) >>= putMVar (recvThread mqtt)
                            forkIO (keepAliveLoop mqtt) >>=
                              putMVar (keepAliveThread mqtt)
-                           addHandler mqtt SPUBLISH (publishHandler mqtt)
+                           addHandler mqtt (publishHandler mqtt)
       else Nothing <$ hClose h
 
 -- | Send a 'Message' to the server.
@@ -205,10 +206,10 @@ sendConnect mqtt = send mqtt connect
 
 -- | Block until a 'Message' of the given type, optionally with the given
 -- 'MsgID', arrives.
-awaitMsg :: MQTT -> SMsgType t -> Maybe MsgID -> IO (Message t)
-awaitMsg mqtt msgType mMsgID = do
+awaitMsg :: SingI t => MQTT -> SMsgType t -> Maybe MsgID -> IO (Message t)
+awaitMsg mqtt _ mMsgID = do
     var <- newEmptyMVar
-    handlerID <- addHandler mqtt msgType (putMVar var)
+    handlerID <- addHandler mqtt (putMVar var)
     let wait = do
           msg <- readMVar var
           if isJust mMsgID
@@ -218,20 +219,25 @@ awaitMsg mqtt msgType mMsgID = do
             else removeHandler mqtt handlerID >> return msg
     wait
 
+-- | A version of 'awaitMsg' that infers the 'MsgType' that should be
+-- waited for.
+awaitMsg' :: SingI t => MQTT -> Maybe MsgID -> IO (Message t)
+awaitMsg' mqtt mMsgID = awaitMsg mqtt sing mMsgID
+
 -- | Register a callback that gets invoked whenever a 'Message' of the
--- given 'MsgType' is received. Returns the ID of the handler which can be
+-- expected 'MsgType' is received. Returns the ID of the handler which can be
 -- passed to 'removeHandler'.
-addHandler :: MQTT -> SMsgType t -> (Message t -> IO ()) -> IO Unique
-addHandler mqtt msgType handler = do
+addHandler :: SingI t => MQTT -> (Message t -> IO ()) -> IO Unique
+addHandler mqtt handler = do
     mhID <- newUnique
     modifyMVar_ (handlers mqtt) $ \hs ->
-      return $ MessageHandler mhID msgType handler : hs
+      return $ MessageHandler mhID handler : hs
     return mhID
 
 -- | Remove the handler with the given ID.
 removeHandler :: MQTT -> Unique -> IO ()
 removeHandler mqtt mhID = modifyMVar_ (handlers mqtt) $ \hs ->
-    return $ filter (\(MessageHandler mhID' _ _) -> mhID' /= mhID) hs
+    return $ filter (\(MessageHandler mhID' _) -> mhID' /= mhID) hs
 
 -- | Subscribe to a 'Topic' with the given 'QoS' and invoke the callback
 -- whenever something is published to the 'Topic'. Returns the 'QoS' that
@@ -410,8 +416,8 @@ dispatchMessage mqtt (SomeMessage (msg :: Message t)) =
     typeSing = toSMsgType msg
 
     applyMsg :: MessageHandler -> IO ()
-    applyMsg (MessageHandler mhID typeSing' handler) =
-      case typeSing %~ typeSing' of
+    applyMsg (MessageHandler mhID (handler :: Message t' -> IO ())) =
+      case typeSing %~ (sing :: SMsgType t') of
         Proved Refl -> void $ forkIO $ handler msg
         Disproved _ -> return ()
 
