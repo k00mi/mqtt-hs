@@ -1,6 +1,12 @@
 {-# Language GeneralizedNewtypeDeriving,
              PatternSynonyms,
-             OverloadedStrings
+             OverloadedStrings,
+             DataKinds,
+             KindSignatures,
+             GADTs,
+             TypeFamilies,
+             ScopedTypeVariables,
+             TemplateHaskell
              #-}
 {-|
 Module: MQTT.Types
@@ -12,6 +18,7 @@ Types representing MQTT messages.
 -}
 module MQTT.Types
   ( Message(..)
+  , SomeMessage(..)
   , MqttHeader(..)
   , MessageBody(..)
   , Connect(..)
@@ -32,21 +39,40 @@ module MQTT.Types
   , MqttText(..)
   , MsgType(..)
   , toMsgType
+  , toMsgType'
+  , toSMsgType
+  , SMsgType(..)
+  , Sing( SCONNECT
+        , SCONNACK
+        , SPUBLISH
+        , SPUBACK
+        , SPUBREC
+        , SPUBREL
+        , SPUBCOMP
+        , SSUBSCRIBE
+        , SSUBACK
+        , SUNSUBSCRIBE
+        , SUNSUBACK
+        , SPINGREQ
+        , SPINGRESP
+        , SDISCONNECT)
   ) where
 
 import Data.ByteString (ByteString)
+import Data.Singletons.TH
 import Data.String (IsString(..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Word
 
-
-data Message
+data Message (t :: MsgType)
     = Message
         { header :: MqttHeader
-        , body :: MessageBody
+        , body :: MessageBody t
         }
-    deriving (Eq, Show)
+
+data SomeMessage where
+    SomeMessage :: Message t -> SomeMessage
 
 -- | Fixed header required in every message
 data MqttHeader
@@ -59,22 +85,21 @@ data MqttHeader
         }
     deriving (Eq, Ord, Show)
 
-data MessageBody
-    = MConnect Connect
-    | MConnAck ConnAck
-    | MPublish Publish
-    | MPubAck SimpleMsg
-    | MPubRec SimpleMsg
-    | MPubRel SimpleMsg
-    | MPubComp SimpleMsg
-    | MSubscribe Subscribe
-    | MSubAck SubAck
-    | MUnsubscribe Unsubscribe
-    | MUnsubAck SimpleMsg
-    | MPingReq
-    | MPingResp
-    | MDisconnect
-    deriving (Show, Eq)
+data MessageBody (t :: MsgType) where
+    MConnect      :: Connect      -> MessageBody CONNECT
+    MConnAck      :: ConnAck      -> MessageBody CONNACK
+    MPublish      :: Publish      -> MessageBody PUBLISH
+    MPubAck       :: SimpleMsg    -> MessageBody PUBACK
+    MPubRec       :: SimpleMsg    -> MessageBody PUBREC
+    MPubRel       :: SimpleMsg    -> MessageBody PUBREL
+    MPubComp      :: SimpleMsg    -> MessageBody PUBCOMP
+    MSubscribe    :: Subscribe    -> MessageBody SUBSCRIBE
+    MSubAck       :: SubAck       -> MessageBody SUBACK
+    MUnsubscribe  :: Unsubscribe  -> MessageBody UNSUBSCRIBE
+    MUnsubAck     :: SimpleMsg    -> MessageBody UNSUBACK
+    MPingReq      ::                 MessageBody PINGREQ
+    MPingResp     ::                 MessageBody PINGRESP
+    MDisconnect   ::                 MessageBody DISCONNECT
 
 data Connect
     = Connect
@@ -148,7 +173,7 @@ data Topic = Topic { levels :: [Text], orig :: Text }
 type MsgID = Word16
 
 -- | Get the message ID of any message, if it exists.
-getMsgID :: MessageBody -> Maybe MsgID
+getMsgID :: MessageBody t -> Maybe MsgID
 getMsgID (MConnect _)         = Nothing
 getMsgID (MConnAck _)         = Nothing
 getMsgID (MPublish pub)       = pubMsgID pub
@@ -209,8 +234,11 @@ data MsgType
     | DISCONNECT
     deriving (Eq, Enum, Ord, Show)
 
--- | Determine the 'MsgType' of a 'Message'
-toMsgType :: Message -> MsgType
+genSingletons [''MsgType]
+singDecideInstance ''MsgType
+
+-- | Determine the 'MsgType' of a 'Message'.
+toMsgType :: Message t -> MsgType
 toMsgType msg =
     case body msg of
       MConnect _      -> CONNECT
@@ -227,3 +255,25 @@ toMsgType msg =
       MPingReq        -> PINGREQ
       MPingResp       -> PINGRESP
       MDisconnect     -> DISCONNECT
+
+toMsgType' :: SomeMessage -> MsgType
+toMsgType' (SomeMessage msg) = toMsgType msg
+
+-- | Determine the singleton 'SMsgType' of a 'Message'.
+toSMsgType :: Message t -> SMsgType t
+toSMsgType msg =
+    case body msg of
+      MConnect _      -> SCONNECT
+      MConnAck _      -> SCONNACK
+      MPublish _      -> SPUBLISH
+      MPubAck _       -> SPUBACK
+      MPubRec _       -> SPUBREC
+      MPubRel _       -> SPUBREL
+      MPubComp _      -> SPUBCOMP
+      MSubscribe _    -> SSUBSCRIBE
+      MSubAck _       -> SSUBACK
+      MUnsubscribe _  -> SUNSUBSCRIBE
+      MUnsubAck _     -> SUNSUBACK
+      MPingReq        -> SPINGREQ
+      MPingResp       -> SPINGRESP
+      MDisconnect     -> SDISCONNECT
