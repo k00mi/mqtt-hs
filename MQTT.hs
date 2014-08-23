@@ -230,7 +230,7 @@ addHandler mqtt msgType handler = do
 -- | Remove the handler with the given ID.
 removeHandler :: MQTT -> Unique -> IO ()
 removeHandler mqtt mhID = modifyMVar_ (handlers mqtt) $ \hs ->
-    return $ filter (\(MessageHandler mhID' _ _) -> mhID' == mhID) hs
+    return $ filter (\(MessageHandler mhID' _ _) -> mhID' /= mhID) hs
 
 -- | Subscribe to a 'Topic' with the given 'QoS' and invoke the callback
 -- whenever something is published to the 'Topic'. Returns the 'QoS' that
