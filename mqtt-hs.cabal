@@ -4,7 +4,7 @@
 name:                mqtt-hs
 version:             0.2.0
 synopsis:            A MQTT client library.
-homepage:            github.com/k00mi/mqtt-hs
+homepage:            http://github.com/k00mi/mqtt-hs
 license:             GPL-3
 license-file:        LICENSE
 author:              Lukas Braun <koomi+mqtt@hackerspace-bamberg.de>
