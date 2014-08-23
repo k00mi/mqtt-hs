@@ -16,7 +16,7 @@ Maintainer: koomi+mqtt@hackerspace-bamberg.de
 
 Types representing MQTT messages.
 -}
-module MQTT.Types
+module Network.MQTT.Types
   ( -- * Messages
     Message(..)
   , SomeMessage(..)

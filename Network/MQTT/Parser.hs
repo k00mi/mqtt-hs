@@ -7,7 +7,7 @@ Maintainer: koomi+mqtt@hackerspace-bamberg.de
 
 Parsers for MQTT messages.
 -}
-module MQTT.Parser where
+module Network.MQTT.Parser where
 
 import Control.Monad
 import Control.Monad.Loops

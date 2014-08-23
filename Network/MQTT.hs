@@ -23,7 +23,7 @@ NoConfirm
 >>> publish mqtt Handshake False "some random/topic" "Some content!"
 A message was published to "some random/topic": "Some content!"
 -}
-module MQTT
+module Network.MQTT
   ( -- * Creating connections
     connect
   , MQTT

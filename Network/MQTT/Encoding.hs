@@ -8,7 +8,7 @@ Maintainer: koomi+mqtt@hackerspace-bamberg.de
 Binary encoding for MQTT messages.
 -}
 
-module MQTT.Encoding where
+module Network.MQTT.Encoding where
 
 import Data.Bits (Bits(..))
 import qualified Data.ByteString as BS

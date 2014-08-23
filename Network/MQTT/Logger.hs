@@ -6,7 +6,7 @@ Maintainer: koomi+mqtt@hackerspace-bamberg.de
 
 A simple logger abstraction.
 -}
-module MQTT.Logger where
+module Network.MQTT.Logger where
 
 import System.IO
 
