@@ -1,4 +1,4 @@
-{-# Language OverloadedStrings, RecordWildCards #-}
+{-# Language OverloadedStrings, RecordWildCards, GADTs #-}
 {-|
 Module: MQTT.Encoding
 Copyright: Lukas Braun 2014
@@ -24,10 +24,10 @@ import System.IO (Handle)
 
 import MQTT.Types
 
-writeTo :: Handle -> Message -> IO ()
+writeTo :: Handle -> Message t -> IO ()
 writeTo h msg = hPutBuilder h (putMessage msg)
 
-putMessage :: Message -> Builder
+putMessage :: Message t -> Builder
 putMessage Message{..} = mconcat
     [ putMqttHeader header (msgType body)
     , encodeRemaining remaining
@@ -61,7 +61,7 @@ encodeRemaining n =
          else word8 digit'
 
 
-putBody :: MessageBody -> Builder
+putBody :: MessageBody t -> Builder
 putBody (MConnect connect)          = putConnect      connect
 putBody (MConnAck connAck)          = putConnAck      connAck
 putBody (MPublish publish)          = putPublish      publish
@@ -158,7 +158,7 @@ toBit :: (Num a) => Bool -> a
 toBit False = 0
 toBit True = 1
 
-msgType :: (Num a) => MessageBody -> a
+msgType :: (Num a) => MessageBody t -> a
 msgType (MConnect _)     = 1
 msgType (MConnAck _)     = 2
 msgType (MPublish _)     = 3
