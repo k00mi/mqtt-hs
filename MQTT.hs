@@ -441,12 +441,12 @@ publishHandler mqtt (Message header (MPublish body)) = do
       (Confirm, Just msgid) ->
           send mqtt $ Message
                         (Header False NoConfirm False)
-                        (MPubRel $ SimpleMsg msgid)
+                        (MPubAck $ SimpleMsg msgid)
       (Handshake, Just msgid) -> do
           send mqtt $ Message
                         (Header False NoConfirm False)
                         (MPubRec $ SimpleMsg msgid)
-          awaitMsg mqtt SPUBREL Nothing
+          awaitMsg mqtt SPUBREL (Just msgid)
           send mqtt $ Message
                         (Header False NoConfirm False)
                         (MPubComp $ SimpleMsg msgid)
