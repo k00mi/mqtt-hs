@@ -57,7 +57,7 @@ module Network.MQTT
   , awaitMsg
   , awaitMsg'
   -- * Reexports
-  , module MQTT.Types
+  , module Network.MQTT.Types
   ) where
 
 import Control.Applicative (pure, (<$>), (<*>), (<$))
@@ -82,10 +82,10 @@ import Prelude hiding (sequence_)
 import System.IO (Handle, hClose, hIsEOF)
 import System.Timeout (timeout)
 
-import MQTT.Types
-import MQTT.Parser (mqttBody, mqttHeader)
-import MQTT.Encoding
-import qualified MQTT.Logger as L
+import Network.MQTT.Types
+import Network.MQTT.Parser (mqttBody, mqttHeader)
+import Network.MQTT.Encoding
+import qualified Network.MQTT.Logger as L
 
 -----------------------------------------
 -- Interface

@@ -21,7 +21,7 @@ import Data.Text.Encoding (decodeUtf8')
 import Data.Word
 import Prelude hiding (takeWhile, take)
 
-import MQTT.Types hiding (body)
+import Network.MQTT.Types hiding (body)
 
 -- | Type of a parser that also keeps track of the remaining length.
 type MessageParser a = StateT Word32 Parser a

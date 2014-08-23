@@ -22,7 +22,7 @@ import Data.Word (Word8)
 import Data.Text.Encoding (encodeUtf8)
 import System.IO (Handle)
 
-import MQTT.Types
+import Network.MQTT.Types
 
 -- | Directly write a 'Message' to the buffer of a 'Handle'.
 writeTo :: Handle -> Message t -> IO ()
