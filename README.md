@@ -9,7 +9,7 @@ A simple example, assuming a broker is running on localhost (needs -XOverloadedS
 import Network.MQTT
 import Network.MQTT.Logger
 Just mqtt <- connect defaultConfig { cLogger = warnings stdLogger }
-let f t payload = putStrLn $ "A message was published to " ++ show t ++ ": " ++ show pyload
+let f t payload = putStrLn $ "A message was published to " ++ show t ++ ": " ++ show payload
 subscribe mqtt NoConfirm "#" f
 publish mqtt Handshake False "some random/topic" "Some content!"
 ```
