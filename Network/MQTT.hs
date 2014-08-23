@@ -64,7 +64,7 @@ import Control.Applicative (pure, (<$>), (<*>), (<$))
 import Control.Concurrent
 import Control.Exception hiding (handle)
 import Control.Monad hiding (sequence_)
-import Data.Attoparsec (parseOnly)
+import Data.Attoparsec.ByteString (parseOnly)
 import Data.Bits ((.&.))
 import Data.ByteString (hGet, ByteString)
 import qualified Data.ByteString as BS
