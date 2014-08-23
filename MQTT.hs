@@ -1,6 +1,4 @@
-{-# Language PatternSynonyms,
-             OverloadedStrings,
-             FlexibleContexts,
+{-# Language OverloadedStrings,
              DataKinds,
              ScopedTypeVariables,
              GADTs,
@@ -62,9 +60,8 @@ module MQTT
   , module MQTT.Types
   ) where
 
-import Control.Applicative
+import Control.Applicative (pure, (<$>), (<*>), (<$))
 import Control.Concurrent
-
 import Control.Exception hiding (handle)
 import Control.Monad hiding (sequence_)
 import Data.Attoparsec (parseOnly)
@@ -72,9 +69,8 @@ import Data.Bits ((.&.))
 import Data.ByteString (hGet, ByteString)
 import qualified Data.ByteString as BS
 import Data.Foldable (for_, sequence_, traverse_)
-import qualified Data.Map as M
 import Data.Maybe (isJust, fromJust)
-import Data.Singletons (withSomeSing, fromSing, SingI(..))
+import Data.Singletons (withSomeSing, SingI(..))
 import Data.Singletons.Decide
 import Data.Text (Text)
 import Data.Traversable (for)
@@ -352,7 +348,7 @@ reconnect mqtt period = do
           >>= putMVar (handle mqtt')
         mCode <- handshake mqtt'
         unless (mCode == Just 0) $ do
-          takeMVar (handle mqtt')
+          void $ takeMVar (handle mqtt')
           threadDelay (period * 10^6)
           go mqtt'
       `catch`
@@ -427,7 +423,7 @@ dispatchMessage mqtt (SomeMessage (msg :: Message t)) =
     typeSing = toSMsgType msg
 
     applyMsg :: MessageHandler -> IO ()
-    applyMsg (MessageHandler mhID (handler :: Message t' -> IO ())) =
+    applyMsg (MessageHandler _ (handler :: Message t' -> IO ())) =
       case typeSing %~ (sing :: SMsgType t') of
         Proved Refl -> void $ forkIO $ handler msg
         Disproved _ -> return ()
@@ -464,7 +460,7 @@ publishHandler mqtt (Message header (MPublish body)) = do
           send mqtt $ Message
                         (Header False NoConfirm False)
                         (MPubRec $ SimpleMsg msgid)
-          awaitMsg mqtt SPUBREL (Just msgid)
+          void $ awaitMsg mqtt SPUBREL (Just msgid)
           send mqtt $ Message
                         (Header False NoConfirm False)
                         (MPubComp $ SimpleMsg msgid)

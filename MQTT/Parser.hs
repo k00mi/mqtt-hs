@@ -15,7 +15,6 @@ import Control.Monad.State.Strict
 import Control.Applicative
 import Data.Attoparsec.ByteString
 import Data.Bits
-import Data.Maybe (isJust)
 import qualified Data.ByteString as BS
 import Data.Singletons (withSomeSing)
 import Data.Text.Encoding (decodeUtf8')

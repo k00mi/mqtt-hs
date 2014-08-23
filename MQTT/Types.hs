@@ -52,7 +52,7 @@ module MQTT.Types
   -- library, they are mostly used internally to get better guarantees
   -- about the flow of 'Message's.
   , toSMsgType
-  , SMsgType(..)
+  , SMsgType
   , Sing( SCONNECT
         , SCONNACK
         , SPUBLISH
@@ -242,8 +242,8 @@ matches :: Topic -> Topic -> Bool
 matches (Topic t1 _) (Topic t2 _) = go t1 t2
       where
         go [] []             = True
-        go [] (l:ls)         = l == "#"
-        go (l:ls) []         = l == "#"
+        go [] (l:_)          = l == "#"
+        go (l:_) []          = l == "#"
         go (l1:ls1) (l2:ls2) = l1 == "#" || l2 == "#"
                                 || ((l1 == "+" || l2 == "+" || l1 == l2)
                                     && go ls1 ls2)

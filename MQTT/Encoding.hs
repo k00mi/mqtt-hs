@@ -16,9 +16,9 @@ import qualified Data.ByteString.Lazy as BSL
 import Data.ByteString.Builder
 import Data.Foldable (foldMap)
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (isJust)
 import Data.Monoid ((<>), mconcat, mempty)
-import Data.Word (Word8, Word16)
+import Data.Word (Word8)
 import Data.Text.Encoding (encodeUtf8)
 import System.IO (Handle)
 
