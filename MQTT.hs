@@ -1,6 +1,9 @@
 {-# Language PatternSynonyms,
              OverloadedStrings,
              FlexibleContexts,
+             DataKinds,
+             ScopedTypeVariables,
+             GADTs,
              DeriveDataTypeable #-}
 {-|
 Module: MQTT
@@ -65,11 +68,12 @@ import qualified Data.ByteString as BS
 import Data.Foldable (for_, sequence_, traverse_)
 import qualified Data.Map as M
 import Data.Maybe (isJust, fromJust)
-import Data.Word
+import Data.Singletons.Decide
 import Data.Text (Text)
 import Data.Traversable (for)
 import Data.Typeable (Typeable)
 import Data.Unique
+import Data.Word
 import Network
 import Prelude hiding (sequence_)
 import System.IO (Handle, hClose, hIsEOF)
@@ -89,7 +93,7 @@ data MQTT
     = MQTT
         { config :: MQTTConfig
         , handle :: MVar Handle
-        , handlers :: MVar (M.Map MsgType [(Unique, Message -> IO ())])
+        , handlers :: MVar [MessageHandler]
         , topicHandlers :: MVar [TopicHandler]
         , recvThread :: MVar ThreadId
         , reconnectHandler :: MVar (IO ())
@@ -103,6 +107,12 @@ data TopicHandler
         , thQoS :: QoS
         , thHandler :: Topic -> ByteString -> IO ()
         }
+
+data MessageHandler where
+    MessageHandler :: Unique
+                   -> SMsgType t
+                   -> (Message t -> IO ())
+                   -> MessageHandler
 
 -- | The various options when establishing a connection.
 data MQTTConfig
@@ -144,7 +154,7 @@ connect conf = do
     h <- connectTo (cHost conf) (PortNumber $ cPort conf)
     mqtt <- MQTT conf
               <$> newMVar h
-              <*> newMVar M.empty
+              <*> newMVar []
               <*> newMVar []
               <*> newEmptyMVar
               <*> newEmptyMVar
@@ -155,11 +165,11 @@ connect conf = do
       then Just mqtt <$ do forkIO (recvLoop mqtt) >>= putMVar (recvThread mqtt)
                            forkIO (keepAliveLoop mqtt) >>=
                              putMVar (keepAliveThread mqtt)
-                           addHandler mqtt PUBLISH (publishHandler mqtt)
+                           addHandler mqtt SPUBLISH (publishHandler mqtt)
       else Nothing <$ hClose h
 
 -- | Send a 'Message' to the server.
-send :: MQTT -> Message -> IO ()
+send :: MQTT -> Message t -> IO ()
 send mqtt msg = do
     logInfo mqtt $ "Sending " ++ show (toMsgType msg)
     h <- readMVar (handle mqtt)
@@ -175,7 +185,7 @@ handshake mqtt = do
              Nothing <$ logError mqtt (show (e :: MQTTException) ++
                                       " while waiting for CONNACK")
     return $ case msg of
-      Just (Message _ (MConnAck (ConnAck code))) -> Just code
+      Just (SomeMessage (Message _ (MConnAck (ConnAck code)))) -> Just code
       _ ->  Nothing
 
 sendConnect :: MQTT -> IO ()
@@ -194,7 +204,7 @@ sendConnect mqtt = send mqtt connect
 
 -- | Block until a 'Message' of the given type, optionally with the given
 -- 'MsgID', arrives.
-awaitMsg :: MQTT -> MsgType -> Maybe MsgID -> IO Message
+awaitMsg :: MQTT -> SMsgType t -> Maybe MsgID -> IO (Message t)
 awaitMsg mqtt msgType mMsgID = do
     var <- newEmptyMVar
     handlerID <- addHandler mqtt msgType (putMVar var)
@@ -202,25 +212,25 @@ awaitMsg mqtt msgType mMsgID = do
           msg <- readMVar var
           if isJust mMsgID
             then if mMsgID == getMsgID (body msg)
-                   then removeHandler mqtt msgType handlerID >> return msg
+                   then removeHandler mqtt handlerID >> return msg
                    else wait
-            else removeHandler mqtt msgType handlerID >> return msg
+            else removeHandler mqtt handlerID >> return msg
     wait
 
 -- | Register a callback that gets invoked whenever a 'Message' of the
 -- given 'MsgType' is received. Returns the ID of the handler which can be
 -- passed to 'removeHandler'.
-addHandler :: MQTT -> MsgType -> (Message -> IO ()) -> IO Unique
+addHandler :: MQTT -> SMsgType t -> (Message t -> IO ()) -> IO Unique
 addHandler mqtt msgType handler = do
-    id <- newUnique
+    mhID <- newUnique
     modifyMVar_ (handlers mqtt) $ \hs ->
-      return $ M.insertWith' (++) msgType [(id, handler)] hs
-    return id
+      return $ MessageHandler mhID msgType handler : hs
+    return mhID
 
 -- | Remove the handler with the given ID.
-removeHandler :: MQTT -> MsgType -> Unique -> IO ()
-removeHandler mqtt msgType id = modifyMVar_ (handlers mqtt) $ \hs ->
-    return $ M.adjust (filter ((/= id) . fst)) msgType hs
+removeHandler :: MQTT -> Unique -> IO ()
+removeHandler mqtt mhID = modifyMVar_ (handlers mqtt) $ \hs ->
+    return $ filter (\(MessageHandler mhID' _ _) -> mhID' == mhID) hs
 
 -- | Subscribe to a 'Topic' with the given 'QoS' and invoke the callback
 -- whenever something is published to the 'Topic'. Returns the 'QoS' that
@@ -246,7 +256,7 @@ sendSubscribe mqtt qos topic = do
                   (MSubscribe $ Subscribe
                     msgID
                     [(topic, qos)])
-    msg <- awaitMsg mqtt SUBACK (Just msgID)
+    msg <- awaitMsg mqtt SSUBACK (Just msgID)
     case msg of
       (Message _ (MSubAck (SubAck _ [qosGranted]))) -> return qosGranted
       _ -> fail $ "Received invalid message as response to subscribe: "
@@ -260,7 +270,7 @@ unsubscribe mqtt topic = do
     send mqtt $ Message
                   (Header False Confirm False)
                   (MUnsubscribe $ Unsubscribe msgID [topic])
-    void $ awaitMsg mqtt UNSUBACK (Just msgID)
+    void $ awaitMsg mqtt SUNSUBACK (Just msgID)
 
 -- | Publish a message to the given 'Topic' at the requested 'QoS' level.
 -- The payload can be any sequence of bytes, including none at all. The 'Bool'
@@ -279,13 +289,13 @@ publish mqtt qos retain topic body = do
                   (MPublish $ Publish topic msgID body)
     case qos of
       NoConfirm -> return ()
-      Confirm   -> void $ awaitMsg mqtt PUBACK msgID
+      Confirm   -> void $ awaitMsg mqtt SPUBACK msgID
       Handshake -> do
-        void $ awaitMsg mqtt PUBREC msgID
+        void $ awaitMsg mqtt SPUBREC msgID
         send mqtt $ Message
                       (Header False Confirm False)
                       (MPubRel $ SimpleMsg (fromJust msgID))
-        void $ awaitMsg mqtt PUBCOMP msgID
+        void $ awaitMsg mqtt SPUBCOMP msgID
 
 -- | Close the connection to the server.
 disconnect :: MQTT -> IO ()
@@ -382,10 +392,7 @@ recvLoop mqtt = forever $ do
       then do
         logError mqtt "EOF in recvLoop"
         maybeReconnect mqtt
-      else do
-        msg <- getMessage mqtt
-        hs <- M.lookup (toMsgType msg) <$> readMVar (handlers mqtt)
-        for_ hs $ mapM_ (forkIO . ($ msg) . snd)
+      else getMessage mqtt >>= dispatchMessage mqtt
   `catches`
     [ Handler $ \e -> do
         logError mqtt $ "recvLoop: Caught " ++ show (e :: IOException)
@@ -393,6 +400,19 @@ recvLoop mqtt = forever $ do
     , Handler $ \e ->
         logWarning mqtt $ "recvLoop: Caught " ++ show (e :: MQTTException)
     ]
+
+dispatchMessage :: MQTT -> SomeMessage -> IO ()
+dispatchMessage mqtt (SomeMessage (msg :: Message t)) =
+    readMVar (handlers mqtt) >>= mapM_ applyMsg
+  where
+    typeSing :: SMsgType t
+    typeSing = toSMsgType msg
+
+    applyMsg :: MessageHandler -> IO ()
+    applyMsg (MessageHandler mhID typeSing' handler) =
+      case typeSing %~ typeSing' of
+        Proved Refl -> void $ forkIO $ handler msg
+        Disproved _ -> return ()
 
 -- | Block on a semaphore that is signaled by 'send'. If a timeout occurs
 -- while waiting, send a 'PINGREQ' to the server and wait for PINGRESP.
@@ -410,12 +430,12 @@ keepAliveLoop mqtt =
         Nothing -> (do send mqtt $ Message
                                     (Header False NoConfirm False)
                                     MPingReq
-                       void $ awaitMsg mqtt PINGRESP Nothing)
+                       void $ awaitMsg mqtt SPINGRESP Nothing)
                   `catch`
                     (\e -> logError mqtt $ "keepAliveLoop: " ++ show (e :: IOException))
         Just _ -> return ()
 
-publishHandler :: MQTT -> Message -> IO ()
+publishHandler :: MQTT -> Message PUBLISH -> IO ()
 publishHandler mqtt (Message header (MPublish body)) = do
     case (qos header, pubMsgID body) of
       (Confirm, Just msgid) ->
@@ -426,7 +446,7 @@ publishHandler mqtt (Message header (MPublish body)) = do
           send mqtt $ Message
                         (Header False NoConfirm False)
                         (MPubRec $ SimpleMsg msgid)
-          awaitMsg mqtt PUBREL Nothing
+          awaitMsg mqtt SPUBREL Nothing
           send mqtt $ Message
                         (Header False NoConfirm False)
                         (MPubComp $ SimpleMsg msgid)
@@ -434,9 +454,8 @@ publishHandler mqtt (Message header (MPublish body)) = do
     callbacks <- filter (matches (topic body) . thTopic)
                    <$> readMVar (topicHandlers mqtt)
     for_ callbacks $ \th -> thHandler th (topic body) (payload body)
-publishHandler mqtt _ = return ()
 
-getMessage :: MQTT -> IO Message
+getMessage :: MQTT -> IO SomeMessage
 getMessage mqtt = do
     h <- readMVar (handle mqtt)
     headerByte <- hGet' h 1
@@ -449,7 +468,7 @@ getMessage mqtt = do
       Left err -> logError mqtt ("Error while parsing: " ++ err) >>
                   throw (ParseError err)
       Right msg -> msg <$
-        logInfo mqtt ("Received " ++ show (toMsgType msg))
+        logInfo mqtt ("Received " ++ show (toMsgType' msg))
 
 getRemaining :: Handle -> Int -> IO Int
 getRemaining h n = go n 1
