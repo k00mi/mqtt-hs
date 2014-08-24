@@ -20,31 +20,31 @@ module Network.MQTT.Monadic
   , onReconnect
   , resubscribe
   -- * Connection settings
-  , MQTTConfig                                                                  
-  , MQTT.defaultConfig                                                               
-  -- ** Field accessors                                                         
-  , cHost                                                                       
-  , cPort                                                                       
-  , cClean                                                                      
-  , cWill                                                                       
-  , cUsername                                                                   
-  , cPassword                                                                   
-  , cKeepAlive                                                                  
-  , cClientID                                                                   
-  , cConnectTimeout                                                             
-  , cReconnPeriod                                                               
+  , MQTTConfig
+  , MQTT.defaultConfig
+  -- ** Field accessors
+  , cHost
+  , cPort
+  , cClean
+  , cWill
+  , cUsername
+  , cPassword
+  , cKeepAlive
+  , cClientID
+  , cConnectTimeout
+  , cReconnPeriod
   , cLogger
   -- * Subscribing and publishing
-  , subscribe                                                                
-  , unsubscribe                                                                 
-  , publish                                                            
+  , subscribe
+  , unsubscribe
+  , publish
   -- * Sending and receiving 'Message's
-  , send                                                                        
-  , addHandler                                                                  
-  , removeHandler                                                               
-  , awaitMsg                                                                    
-  , awaitMsg'                                 
-  -- * Reexports                                  
+  , send
+  , addHandler
+  , removeHandler
+  , awaitMsg
+  , awaitMsg'
+  -- * Reexports
   , module Network.MQTT.Types
   ) where
 
