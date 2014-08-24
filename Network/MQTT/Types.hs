@@ -182,9 +182,9 @@ newtype SimpleMsg = SimpleMsg { msgID :: MsgID }
 
 -- | The different levels of QoS
 data QoS
-    = NoConfirm -- ^ Fire and forget
-    | Confirm   -- ^ Acknowledged delivery (repeat until ack)
-    | Handshake -- ^ Assured delivery (four-step handshake)
+    = NoConfirm -- ^ Fire and forget, message will be published at most once.
+    | Confirm   -- ^ Acknowledged delivery, message will be published at least once.
+    | Handshake -- ^ Assured delivery, message will be published exactly once.
     deriving (Eq, Ord, Enum, Show)
 
 -- | A Will message is published by the broker if a client disconnects
