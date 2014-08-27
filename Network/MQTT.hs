@@ -432,8 +432,9 @@ recvLoop mqtt = forever (do
         logError mqtt $ "recvLoop: Caught " ++ show (e :: IOException)
         didReconnect <- maybeReconnect mqtt
         when didReconnect $ recvLoop mqtt
-    , Handler $ \e ->
+    , Handler $ \e -> do
         logWarning mqtt $ "recvLoop: Caught " ++ show (e :: MQTTException)
+        recvLoop mqtt
     ]
 
 dispatchMessage :: MQTT -> SomeMessage -> IO ()
