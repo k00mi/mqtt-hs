@@ -368,11 +368,15 @@ reconnect mqtt period = do
           void $ takeMVar (handle mqtt')
           threadDelay (period * 10^6)
           go mqtt'
-      `catch`
-        \e -> do
-            logWarning mqtt $ "reconnect: " ++ show (e :: IOException)
-            threadDelay (period * 10^6)
-            go mqtt'
+      `catches`
+        let logAndRetry :: Exception e => e -> IO ()
+            logAndRetry e = do
+              logWarning mqtt $ "reconnect: " ++ show e
+              threadDelay (period * 10^6)
+              go mqtt'
+        in [ Handler $ \e -> logAndRetry (e :: IOException)
+           , Handler $ \e -> logAndRetry (e :: MQTTException)
+           ]
 
 -- | Register a callback that will be invoked when a reconnect has
 -- happened.
