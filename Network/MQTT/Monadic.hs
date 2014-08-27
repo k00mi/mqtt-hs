@@ -80,7 +80,7 @@ reconnect n = asks getMQTT >>= liftIO . flip MQTT.reconnect n
 onReconnect :: MonadMQTT r m => IO () -> m ()
 onReconnect io = asks getMQTT >>= liftIO . flip MQTT.onReconnect io
 
-resubscribe :: MonadMQTT r m => m [QoS]
+resubscribe :: MonadMQTT r m => m (Maybe [QoS])
 resubscribe = asks getMQTT >>= liftIO . MQTT.resubscribe
 
 subscribe :: MonadMQTT r m
