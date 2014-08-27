@@ -425,9 +425,7 @@ recvLoop mqtt = forever (do
     h <- readMVar (handle mqtt)
     eof <- hIsEOF h
     if eof
-      then do
-        logError mqtt "EOF in recvLoop"
-        ioError $ mkIOError eofErrorType "" (Just h) Nothing
+      then ioError $ mkIOError eofErrorType "" (Just h) Nothing
       else getMessage mqtt >>= dispatchMessage mqtt)
   `catches`
     [ Handler $ \e -> do
