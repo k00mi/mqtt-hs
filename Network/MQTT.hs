@@ -80,6 +80,7 @@ import Data.Word
 import Network
 import Prelude hiding (sequence_)
 import System.IO (Handle, hClose, hIsEOF, hSetBinaryMode)
+import System.IO.Error (ioError, mkIOError, eofErrorType)
 import System.Timeout (timeout)
 
 import Network.MQTT.Types
@@ -392,12 +393,13 @@ resubscribe mqtt =
       mapM (\th -> sendSubscribe mqtt (thQoS th) (thTopic th)) ths
     else return Nothing
 
-maybeReconnect :: MQTT -> IO ()
+maybeReconnect :: MQTT -> IO Bool
 maybeReconnect mqtt = do
     catch
       (readMVar (handle mqtt) >>= hClose)
       (const (pure ()) :: IOException -> IO ())
-    for_ (cReconnPeriod $ config mqtt) $ reconnect mqtt
+    maybe (return False) (fmap  (const True) . reconnect mqtt) $
+      cReconnPeriod (config mqtt)
 
 
 -----------------------------------------
@@ -419,18 +421,19 @@ logError mqtt = L.logError (cLogger (config mqtt))
 -----------------------------------------
 
 recvLoop :: MQTT -> IO ()
-recvLoop mqtt = forever $ do
+recvLoop mqtt = forever (do
     h <- readMVar (handle mqtt)
     eof <- hIsEOF h
     if eof
       then do
         logError mqtt "EOF in recvLoop"
-        maybeReconnect mqtt
-      else getMessage mqtt >>= dispatchMessage mqtt
+        ioError $ mkIOError eofErrorType "" (Just h) Nothing
+      else getMessage mqtt >>= dispatchMessage mqtt)
   `catches`
     [ Handler $ \e -> do
         logError mqtt $ "recvLoop: Caught " ++ show (e :: IOException)
-        maybeReconnect mqtt
+        didReconnect <- maybeReconnect mqtt
+        when didReconnect $ recvLoop mqtt
     , Handler $ \e ->
         logWarning mqtt $ "recvLoop: Caught " ++ show (e :: MQTTException)
     ]
