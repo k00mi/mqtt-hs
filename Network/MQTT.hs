@@ -190,12 +190,22 @@ connect conf = do
       else Nothing <$ hClose h
 
 -- | Send a 'Message' to the server.
+--
+-- In the case of an 'IOException', a reconnect is initiated and the 'Message'
+-- sent again if 'cReconnPeriod' is set; otherwise the exception is rethrown.
 send :: MQTT -> Message t -> IO ()
 send mqtt msg = do
     logInfo mqtt $ "Sending " ++ show (toMsgType msg)
     h <- readMVar (handle mqtt)
     writeTo h msg
     for_ (sendSem mqtt) signalQSem
+  `catch`
+    \e -> do
+      logError mqtt $ "send: Caught " ++ show (e :: IOException)
+      didReconnect <- maybeReconnect mqtt
+      if didReconnect
+         then send mqtt msg
+         else throw e
 
 handshake :: MQTT -> IO (Maybe Word8)
 handshake mqtt = do
