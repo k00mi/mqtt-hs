@@ -484,7 +484,10 @@ keepAliveLoop mqtt =
                                     MPingReq
                        void $ awaitMsg mqtt SPINGRESP Nothing)
                   `catch`
-                    (\e -> logError mqtt $ "keepAliveLoop: " ++ show (e :: IOException))
+                    (\e -> do
+                      logError mqtt $ "keepAliveLoop: " ++ show (e :: IOException)
+                      didReconnect <- maybeReconnect mqtt
+                      when didReconnect $ loop period sem)
         Just _ -> return ()
 
 publishHandler :: MQTT -> Message PUBLISH -> IO ()
