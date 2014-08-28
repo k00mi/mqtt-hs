@@ -347,16 +347,18 @@ disconnect mqtt = do
 reconnect :: MQTT -> Int -> IO ()
 reconnect mqtt period = do
     -- Other threads can't write while the MVar is empty
-    _ <- takeMVar (handle mqtt)
-    logInfo mqtt "Reconnecting..."
-    -- Temporarily create a new MVar for the handshake so other threads
-    -- don't write before the connection is fully established
-    handleVar <- newEmptyMVar
-    go (mqtt { handle = handleVar })
-    readMVar handleVar >>= putMVar (handle mqtt)
-    -- forkIO so recvLoop isn't blocked
-    tryReadMVar (reconnectHandler mqtt) >>= traverse_ (void . forkIO)
-    logInfo mqtt "Reconnect successfull"
+    mh <- tryTakeMVar (handle mqtt)
+    -- If it was empty, someone else is already reconnecting
+    for_ mh $ \_ -> do
+      logInfo mqtt "Reconnecting..."
+      -- Temporarily create a new MVar for the handshake so other threads
+      -- don't write before the connection is fully established
+      handleVar <- newEmptyMVar
+      go (mqtt { handle = handleVar })
+      readMVar handleVar >>= putMVar (handle mqtt)
+      -- forkIO so recvLoop isn't blocked
+      tryReadMVar (reconnectHandler mqtt) >>= traverse_ (void . forkIO)
+      logInfo mqtt "Reconnect successfull"
   where
     -- try reconnecting until it works
     go mqtt' = do
