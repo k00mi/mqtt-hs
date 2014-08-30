@@ -80,7 +80,7 @@ import Data.Word
 import Network
 import Prelude hiding (sequence_)
 import System.IO (Handle, hClose, hIsEOF, hSetBinaryMode)
-import System.IO.Error (ioError, mkIOError, eofErrorType)
+import System.IO.Error (ioError, mkIOError, eofErrorType, annotateIOError)
 import System.Timeout (timeout)
 
 import Network.MQTT.Types
@@ -412,6 +412,7 @@ resubscribe mqtt =
       mapM (\th -> sendSubscribe mqtt (thQoS th) (thTopic th)) ths
     else return Nothing
 
+-- | Close the handle and initiate a reconnect, if 'cReconnPeriod' is set.
 maybeReconnect :: MQTT -> IO Bool
 maybeReconnect mqtt = do
     catch
@@ -440,21 +441,14 @@ logError mqtt = L.logError (cLogger (config mqtt))
 -----------------------------------------
 
 recvLoop :: MQTT -> IO ()
-recvLoop mqtt = forever (do
+recvLoop m = loopWithReconnect m "recvLoop" $ \mqtt -> do
     h <- readMVar (handle mqtt)
     eof <- hIsEOF h
     if eof
       then ioError $ mkIOError eofErrorType "" (Just h) Nothing
-      else getMessage mqtt >>= dispatchMessage mqtt)
-  `catches`
-    [ Handler $ \e -> do
-        logError mqtt $ "recvLoop: Caught " ++ show (e :: IOException)
-        didReconnect <- maybeReconnect mqtt
-        when didReconnect $ recvLoop mqtt
-    , Handler $ \e -> do
-        logWarning mqtt $ "recvLoop: Caught " ++ show (e :: MQTTException)
-        recvLoop mqtt
-    ]
+      else getMessage mqtt >>= dispatchMessage mqtt
+  `catch`
+    \e -> logWarning mqtt $ "recvLoop: Caught " ++ show (e :: MQTTException)
 
 dispatchMessage :: MQTT -> SomeMessage -> IO ()
 dispatchMessage mqtt (SomeMessage (msg :: Message t)) =
@@ -477,21 +471,28 @@ dispatchMessage mqtt (SomeMessage (msg :: Message t)) =
 -- Returns immediately if no Keep Alive is specified.
 keepAliveLoop :: MQTT -> IO ()
 keepAliveLoop mqtt =
-    sequence_ (loop <$> cKeepAlive (config mqtt) <*> sendSem mqtt)
+    maybe (return ()) (loopWithReconnect mqtt "keepAliveLoop") $
+      loopBody <$> cKeepAlive (config mqtt) <*> sendSem mqtt
   where
-    loop period sem = forever $ do
+    loopBody period sem mqtt = do
       rslt <- timeout (period * 1000000) $ waitQSem sem
       case rslt of
-        Nothing -> (do send mqtt $ Message
-                                    (Header False NoConfirm False)
-                                    MPingReq
-                       void $ awaitMsg mqtt SPINGRESP Nothing)
-                  `catch`
-                    (\e -> do
-                      logError mqtt $ "keepAliveLoop: " ++ show (e :: IOException)
-                      didReconnect <- maybeReconnect mqtt
-                      when didReconnect $ loop period sem)
+        Nothing -> do send mqtt $ Message
+                                   (Header False NoConfirm False)
+                                   MPingReq
+                      void $ awaitMsg mqtt SPINGRESP Nothing
         Just _ -> return ()
+
+-- | Forever executes the given @IO@ action. In the case of an 'IOException',
+-- a reconnect is initiated if 'cReconnPeriod' is set, otherwise the action
+-- terminates.
+loopWithReconnect :: MQTT -> String -> (MQTT -> IO ()) -> IO ()
+loopWithReconnect mqtt desc act = catch (forever $ act mqtt) $ \e -> do
+  logError mqtt $ show $ annotateIOError e desc Nothing Nothing
+  didReconnect <- maybeReconnect mqtt
+  if didReconnect
+    then loopWithReconnect mqtt desc act
+    else logError mqtt $ desc ++ ": No reconnect, terminating."
 
 publishHandler :: MQTT -> Message PUBLISH -> IO ()
 publishHandler mqtt (Message header (MPublish body)) = do
