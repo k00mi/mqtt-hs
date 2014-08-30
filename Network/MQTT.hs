@@ -102,7 +102,7 @@ data MQTT
         , recvThread :: MVar ThreadId
         , reconnectHandler :: MVar (IO ())
         , keepAliveThread :: MVar ThreadId
-        , sendSem :: Maybe QSem
+        , sendSignal :: Maybe (MVar ()) -- Nothing if keep alive is 0
         }
 
 data TopicHandler
@@ -180,7 +180,7 @@ connect conf = do
               <*> newEmptyMVar
               <*> newEmptyMVar
               <*> newEmptyMVar
-              <*> for (cKeepAlive conf) (const (newQSem 0))
+              <*> for (cKeepAlive conf) (const newEmptyMVar)
     mCode <- handshake mqtt
     if mCode == Just 0
       then Just mqtt <$ do forkIO (recvLoop mqtt) >>= putMVar (recvThread mqtt)
@@ -198,7 +198,7 @@ send mqtt msg = do
     logInfo mqtt $ "Sending " ++ show (toMsgType msg)
     h <- readMVar (handle mqtt)
     writeTo h msg
-    for_ (sendSem mqtt) signalQSem
+    for_ (sendSignal mqtt) $ flip tryPutMVar ()
   `catch`
     \e -> do
       logError mqtt $ "send: Caught " ++ show (e :: IOException)
@@ -463,19 +463,17 @@ dispatchMessage mqtt (SomeMessage (msg :: Message t)) =
         Proved Refl -> void $ forkIO $ handler msg
         Disproved _ -> return ()
 
--- | Block on a semaphore that is signaled by 'send'. If a timeout occurs
+-- | Block on a @MVar ()@ that is written to by 'send'. If a timeout occurs
 -- while waiting, send a 'PINGREQ' to the server and wait for PINGRESP.
--- Ignores errors that occur while writing to the handle, reconnects are
--- initiated by 'recvLoop'.
 --
 -- Returns immediately if no Keep Alive is specified.
 keepAliveLoop :: MQTT -> IO ()
 keepAliveLoop mqtt =
     maybe (return ()) (loopWithReconnect mqtt "keepAliveLoop") $
-      loopBody <$> cKeepAlive (config mqtt) <*> sendSem mqtt
+      loopBody <$> cKeepAlive (config mqtt) <*> sendSignal mqtt
   where
-    loopBody period sem mqtt = do
-      rslt <- timeout (period * 1000000) $ waitQSem sem
+    loopBody period mvar mqtt = do
+      rslt <- timeout (period * 1000000) $ takeMVar mvar
       case rslt of
         Nothing -> do send mqtt $ Message
                                    (Header False NoConfirm False)
