@@ -172,7 +172,6 @@ defaultConfig = MQTTConfig
 connect :: MQTTConfig -> IO (Maybe MQTT)
 connect conf = do
     h <- connectTo (cHost conf) (PortNumber $ cPort conf)
-    hSetBinaryMode h True
     mqtt <- MQTT conf
               <$> newMVar h
               <*> newMVar []
@@ -181,13 +180,18 @@ connect conf = do
               <*> newEmptyMVar
               <*> newEmptyMVar
               <*> for (cKeepAlive conf) (const newEmptyMVar)
-    mCode <- handshake mqtt
-    if mCode == Just 0
-      then Just mqtt <$ do forkIO (recvLoop mqtt) >>= putMVar (recvThread mqtt)
-                           forkIO (keepAliveLoop mqtt) >>=
-                             putMVar (keepAliveThread mqtt)
-                           addHandler mqtt (publishHandler mqtt)
-      else Nothing <$ hClose h
+    onException
+      (do
+        hSetBinaryMode h True
+        mCode <- handshake mqtt
+        if mCode == Just 0
+          then Just mqtt <$ do forkIO (recvLoop mqtt) >>=
+                                 putMVar (recvThread mqtt)
+                               forkIO (keepAliveLoop mqtt) >>=
+                                 putMVar (keepAliveThread mqtt)
+                               addHandler mqtt (publishHandler mqtt)
+          else Nothing <$ hClose h)
+      (disconnect mqtt)
 
 -- | Send a 'Message' to the server.
 --
