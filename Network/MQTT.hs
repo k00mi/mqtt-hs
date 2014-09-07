@@ -346,7 +346,7 @@ publish mqtt qos retain topic body = do
 
 -- | Close the connection to the server.
 disconnect :: MQTT -> IO ()
-disconnect mqtt = do
+disconnect mqtt = mask_ $ do
     h <- takeMVar $ handle mqtt
     writeTo h $
       Message
