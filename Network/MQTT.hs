@@ -246,15 +246,18 @@ sendConnect mqtt = send mqtt connect
 awaitMsg :: SingI t => MQTT -> SMsgType t -> Maybe MsgID -> IO (Message t)
 awaitMsg mqtt _ mMsgID = do
     var <- newEmptyMVar
-    handlerID <- addHandler mqtt (putMVar var)
-    let wait = do
-          msg <- readMVar var
-          if isJust mMsgID
-            then if mMsgID == getMsgID (body msg)
-                   then removeHandler mqtt handlerID >> return msg
-                   else wait
-            else removeHandler mqtt handlerID >> return msg
-    wait
+    bracket
+      (addHandler mqtt (putMVar var))
+      (removeHandler mqtt)
+      (\handlerID ->
+        let wait = do
+              msg <- readMVar var
+              if isJust mMsgID
+                then if mMsgID == getMsgID (body msg)
+                       then return msg
+                       else wait
+                else return msg
+        in wait)
 
 -- | A version of 'awaitMsg' that infers the type of the 'Message' that
 -- is expected.
