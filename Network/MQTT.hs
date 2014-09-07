@@ -345,8 +345,8 @@ disconnect mqtt = do
       Message
         (Header False NoConfirm False)
         MDisconnect
-    readMVar (recvThread mqtt) >>= killThread
-    readMVar (keepAliveThread mqtt) >>= killThread
+    tryReadMVar (recvThread mqtt) >>= traverse_ killThread
+    tryReadMVar (keepAliveThread mqtt) >>= traverse_ killThread
     hClose h
 
 -- | Try creating a new connection with the same config (retrying after the
