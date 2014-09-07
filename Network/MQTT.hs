@@ -405,8 +405,7 @@ reconnect mqtt period = do
 onReconnect :: MQTT -> IO () -> IO ()
 onReconnect mqtt io = do
     let mvar = reconnectHandler mqtt
-    empty <- isEmptyMVar mvar
-    unless empty (void $ takeMVar mvar)
+    _ <- tryTakeMVar mvar
     putMVar mvar io
 
 -- | Resubscribe to all subscribed topics if the connection is clean.
