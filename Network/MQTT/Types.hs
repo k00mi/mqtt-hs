@@ -36,9 +36,11 @@ module Network.MQTT.Types
   , MsgID
   , getMsgID
   , Topic
+  , matches
   , fromTopic
   , toTopic
-  , matches
+  , getLevels
+  , fromLevels
   , MqttText(..)
   -- * Message types
   , MsgType(..)
@@ -202,16 +204,6 @@ data Will
 newtype MqttText = MqttText { text :: Text }
     deriving (Eq, Show, IsString)
 
--- | A topic is a "hierarchical name space that defines a taxonomy of
--- information sources for which subscribers can register an interest."
---
--- See
--- <http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#appendix-a here>
--- for more information on topics.
-data Topic = Topic { levels :: [Text], orig :: Text }
--- levels and orig should always refer to the same topic, this way no text
--- has to be copied when converting from/to text
-
 type MsgID = Word16
 
 -- | Get the message ID of any message, if it exists.
@@ -230,6 +222,16 @@ getMsgID (MUnsubAck simple)   = Just (msgID simple)
 getMsgID MPingReq             = Nothing
 getMsgID MPingResp            = Nothing
 getMsgID MDisconnect          = Nothing
+
+-- | A topic is a "hierarchical name space that defines a taxonomy of
+-- information sources for which subscribers can register an interest."
+--
+-- See
+-- <http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#appendix-a here>
+-- for more information on topics.
+data Topic = Topic { levels :: [Text], orig :: Text }
+-- levels and orig should always refer to the same topic, this way no text
+-- has to be copied when converting from/to text
 
 instance Show Topic where
     show (Topic _ t) = show t
@@ -253,6 +255,14 @@ toTopic (MqttText txt) = Topic (T.split (== '/') txt) txt
 
 fromTopic :: Topic -> MqttText
 fromTopic = MqttText . orig
+
+-- | Split a topic into its individual levels.
+getLevels :: Topic -> [Text]
+getLevels = levels
+
+-- | Create a 'Topic' from its individual levels.
+fromLevels :: [Text] -> Topic
+fromLevels ls = Topic ls (T.intercalate "/" ls)
 
 instance IsString Topic where
     fromString str = let txt = T.pack str in
