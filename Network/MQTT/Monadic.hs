@@ -1,4 +1,4 @@
-{-# Language ConstraintKinds #-}
+{-# Language ConstraintKinds, FlexibleContexts #-}
 {-|
 Module: MQTT
 Copyright: Lukas Braun 2014
@@ -50,6 +50,7 @@ module Network.MQTT.Monadic
 
 import Control.Monad.IO.Class
 import Control.Monad.Reader
+import Control.Monad.Trans.Control
 import Data.ByteString (ByteString)
 import Data.Singletons (SingI(..))
 import Data.Unique
@@ -77,17 +78,20 @@ disconnect = asks getMQTT >>= liftIO . MQTT.disconnect
 reconnect :: MonadMQTT r m => Int -> m ()
 reconnect n = asks getMQTT >>= liftIO . flip MQTT.reconnect n
 
-onReconnect :: MonadMQTT r m => IO () -> m ()
-onReconnect io = asks getMQTT >>= liftIO . flip MQTT.onReconnect io
+onReconnect :: (MonadBaseControl IO m, MonadMQTT r m) => m () -> m ()
+onReconnect action = do
+    mqtt <- asks getMQTT
+    liftBaseDiscard (MQTT.onReconnect mqtt) action
 
 resubscribe :: MonadMQTT r m => m (Maybe [QoS])
 resubscribe = asks getMQTT >>= liftIO . MQTT.resubscribe
 
-subscribe :: MonadMQTT r m
-          => QoS -> Topic -> (Topic -> ByteString -> IO ()) -> m QoS
+subscribe :: (MonadBaseControl IO m, MonadMQTT r m)
+          => QoS -> Topic -> (Topic -> ByteString -> m ()) -> m QoS
 subscribe qos topic callback = do
     mqtt <- asks getMQTT
-    liftIO $ MQTT.subscribe mqtt qos topic callback
+    liftBaseWith $ \runInBase ->
+      MQTT.subscribe mqtt qos topic (\t bs -> void $ runInBase $ callback t bs)
 
 unsubscribe :: MonadMQTT r m => Topic -> m ()
 unsubscribe topic = asks getMQTT >>= liftIO . flip MQTT.unsubscribe topic
@@ -102,9 +106,12 @@ send :: MonadMQTT r m
      => Message t -> m ()
 send msg = asks getMQTT >>= liftIO . flip MQTT.send msg
 
-addHandler :: (MonadMQTT r m, SingI t)
-           => (Message t -> IO ()) -> m Unique
-addHandler callback = asks getMQTT >>= liftIO . flip MQTT.addHandler callback
+addHandler :: (MonadBaseControl IO m, MonadMQTT r m, SingI t)
+           => (Message t -> m ()) -> m Unique
+addHandler callback = do
+    mqtt <- asks getMQTT
+    liftBaseWith $ \runInBase ->
+      MQTT.addHandler mqtt (void . runInBase . callback)
 
 removeHandler :: MonadMQTT r m
               => Unique -> m ()
