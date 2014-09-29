@@ -9,6 +9,9 @@ Wrappers for the functions in @Network.MQTT@ that carry the 'MQTT' parameter
 in a 'MonadReader'.
 
 For documentation see the corresponding functions in @Network.MQTT@.
+
+A note on the functions using 'MonadBaseControl': Any changes to the monadic
+state are discarded, the functions are only called for their side-effects.
 -}
 module Network.MQTT.Monadic
   ( HasMQTT(..)
