@@ -10,29 +10,35 @@ module Network.MQTT.Logger where
 
 import System.IO
 
--- | Absract logger with three levels of importance.
+-- | Absract logger with four priority levels.
 data Logger
     = Logger
-        { logInfo :: String -> IO ()
+        { logDebug :: String -> IO ()
+        , logInfo :: String -> IO ()
         , logWarning :: String -> IO ()
         , logError :: String -> IO ()
         }
 
--- | 'logInfo' prints to stdout, 'logWarning' and 'logError' to stderr
--- (with [Warning]/[Error] prefix)
+-- | 'logInfo' and 'logDebug' print to stdout, 'logWarning' and 'logError' to
+-- stderr. A prefix indicating the level is prepended to each message.
 stdLogger :: Logger
 stdLogger = Logger
-              putStrLn
+              (\msg -> putStrLn $ "[Debug] " ++ msg)
+              (\msg -> putStrLn $ "[Info] " ++ msg)
               (\msg -> hPutStrLn stderr $ "[Warning] " ++ msg)
               (\msg -> hPutStrLn stderr $ "[Error] " ++ msg)
 
--- | Log only warnings and errors, ignoring anything passed to 'logInfo'.
-warnings :: Logger -> Logger
-warnings l = l { logInfo = ignore }
+-- | Don't log debug messages.
+info :: Logger -> Logger
+info l = l { logDebug = ignore }
 
--- | Like 'warnings', but logs only errors.
+-- | Log only warnings and errors.
+warnings :: Logger -> Logger
+warnings l = (info l) { logInfo = ignore }
+
+-- | Log only errors.
 errors :: Logger -> Logger
-errors l = l { logInfo = ignore, logWarning = ignore }
+errors l = (warnings l) { logWarning = ignore }
 
 -- | Ignore the message.
 ignore :: String -> IO ()
