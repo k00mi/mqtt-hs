@@ -106,7 +106,7 @@ publish qos retain topic payload = do
     mqtt <- asks getMQTT
     liftIO $ MQTT.publish mqtt qos retain topic payload
 
-send :: MonadMQTT r m
+send :: (MonadMQTT r m, SingI t)
      => Message t -> m ()
 send msg = asks getMQTT >>= liftIO . flip MQTT.send msg
 

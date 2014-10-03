@@ -6,6 +6,7 @@
              GADTs,
              TypeFamilies,
              ScopedTypeVariables,
+             RankNTypes,
              TemplateHaskell
              #-}
 {-|
@@ -55,6 +56,7 @@ module Network.MQTT.Types
   -- about the flow of 'Message's.
   , toSMsgType
   , SMsgType
+  , withSomeSingI
   , Sing( SCONNECT
         , SCONNACK
         , SPUBLISH
@@ -87,7 +89,7 @@ data Message (t :: MsgType)
 
 -- | Any message, hiding the index.
 data SomeMessage where
-    SomeMessage :: Message t -> SomeMessage
+    SomeMessage :: SingI t => Message t -> SomeMessage
 
 -- | Fixed header required in every message.
 data MqttHeader
@@ -290,43 +292,17 @@ genSingletons [''MsgType]
 singDecideInstance ''MsgType
 
 -- | Determine the 'MsgType' of a 'Message'.
-toMsgType :: Message t -> MsgType
-toMsgType msg =
-    case body msg of
-      MConnect _      -> CONNECT
-      MConnAck _      -> CONNACK
-      MPublish _      -> PUBLISH
-      MPubAck _       -> PUBACK
-      MPubRec _       -> PUBREC
-      MPubRel _       -> PUBREL
-      MPubComp _      -> PUBCOMP
-      MSubscribe _    -> SUBSCRIBE
-      MSubAck _       -> SUBACK
-      MUnsubscribe _  -> UNSUBSCRIBE
-      MUnsubAck _     -> UNSUBACK
-      MPingReq        -> PINGREQ
-      MPingResp       -> PINGRESP
-      MDisconnect     -> DISCONNECT
+toMsgType :: SingI t => Message t -> MsgType
+toMsgType = fromSing . toSMsgType
 
 -- | Determine the 'MsgType' of a 'SomeMessage'.
 toMsgType' :: SomeMessage -> MsgType
 toMsgType' (SomeMessage msg) = toMsgType msg
 
 -- | Determine the singleton 'SMsgType' of a 'Message'.
-toSMsgType :: Message t -> SMsgType t
-toSMsgType msg =
-    case body msg of
-      MConnect _      -> SCONNECT
-      MConnAck _      -> SCONNACK
-      MPublish _      -> SPUBLISH
-      MPubAck _       -> SPUBACK
-      MPubRec _       -> SPUBREC
-      MPubRel _       -> SPUBREL
-      MPubComp _      -> SPUBCOMP
-      MSubscribe _    -> SSUBSCRIBE
-      MSubAck _       -> SSUBACK
-      MUnsubscribe _  -> SUNSUBSCRIBE
-      MUnsubAck _     -> SUNSUBACK
-      MPingReq        -> SPINGREQ
-      MPingResp       -> SPINGRESP
-      MDisconnect     -> SDISCONNECT
+toSMsgType :: SingI t => Message t -> SMsgType t
+toSMsgType _ = sing
+
+-- | Helper to generate both an implicit and explicit singleton.
+withSomeSingI :: MsgType -> (forall t. SingI t => SMsgType t -> r) -> r
+withSomeSingI t f = withSomeSing t $ \s -> withSingI s $ f s

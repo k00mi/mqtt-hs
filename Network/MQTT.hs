@@ -70,7 +70,7 @@ import Data.ByteString (hGet, ByteString)
 import qualified Data.ByteString as BS
 import Data.Foldable (for_, sequence_, traverse_)
 import Data.Maybe (isJust, fromJust)
-import Data.Singletons (withSomeSing, SingI(..))
+import Data.Singletons (SingI(..))
 import Data.Singletons.Decide
 import Data.Text (Text)
 import Data.Traversable (for)
@@ -114,9 +114,7 @@ data TopicHandler
 
 data MessageHandler where
     MessageHandler :: SingI t
-                   => Unique
-                   -> (Message t -> IO ())
-                   -> MessageHandler
+                   => Unique -> (Message t -> IO ()) -> MessageHandler
 
 -- | The various options when establishing a connection.
 data MQTTConfig
@@ -197,7 +195,7 @@ connect conf = do
 --
 -- In the case of an 'IOException', a reconnect is initiated and the 'Message'
 -- sent again if 'cReconnPeriod' is set; otherwise the exception is rethrown.
-send :: MQTT -> Message t -> IO ()
+send :: SingI t => MQTT -> Message t -> IO ()
 send mqtt msg = do
     logDebug mqtt $ "Sending " ++ show (toMsgType msg)
     h <- readMVar (handle mqtt)
@@ -466,15 +464,12 @@ recvLoop m = loopWithReconnect m "recvLoop" $ \mqtt -> do
     \e -> logWarning mqtt $ "recvLoop: Caught " ++ show (e :: MQTTException)
 
 dispatchMessage :: MQTT -> SomeMessage -> IO ()
-dispatchMessage mqtt (SomeMessage (msg :: Message t)) =
+dispatchMessage mqtt (SomeMessage msg) =
     readMVar (handlers mqtt) >>= mapM_ applyMsg
   where
-    typeSing :: SMsgType t
-    typeSing = toSMsgType msg
-
     applyMsg :: MessageHandler -> IO ()
     applyMsg (MessageHandler _ (handler :: Message t' -> IO ())) =
-      case typeSing %~ (sing :: SMsgType t') of
+      case toSMsgType msg %~ (sing :: SMsgType t') of
         Proved Refl -> void $ forkIO $ handler msg
         Disproved _ -> return ()
 
@@ -535,7 +530,7 @@ getMessage mqtt = do
     rest <- hGet' h remaining
     let parseRslt = do
           (mType, header) <- parseOnly mqttHeader headerByte
-          withSomeSing mType $ \sMsgType ->
+          withSomeSingI mType $ \sMsgType ->
             parseOnly
               (SomeMessage . Message header
                 <$> mqttBody header sMsgType (fromIntegral remaining))
