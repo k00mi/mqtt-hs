@@ -199,7 +199,7 @@ connect conf = do
 -- sent again if 'cReconnPeriod' is set; otherwise the exception is rethrown.
 send :: MQTT -> Message t -> IO ()
 send mqtt msg = do
-    logInfo mqtt $ "Sending " ++ show (toMsgType msg)
+    logDebug mqtt $ "Sending " ++ show (toMsgType msg)
     h <- readMVar (handle mqtt)
     writeTo h msg
     for_ (sendSignal mqtt) $ flip tryPutMVar ()
@@ -432,6 +432,9 @@ maybeReconnect mqtt = do
 -- Logger utility functions
 -----------------------------------------
 
+logDebug :: MQTT -> String -> IO ()
+logDebug mqtt = L.logDebug (cLogger (config mqtt))
+
 logInfo :: MQTT -> String -> IO ()
 logInfo mqtt = L.logInfo (cLogger (config mqtt))
 
@@ -535,7 +538,7 @@ getMessage mqtt = do
       Left err -> logError mqtt ("Error while parsing: " ++ err) >>
                   throw (ParseError err)
       Right msg -> msg <$
-        logInfo mqtt ("Received " ++ show (toMsgType' msg))
+        logDebug mqtt ("Received " ++ show (toMsgType' msg))
 
 getRemaining :: Handle -> Int -> IO Int
 getRemaining h n = go n 1
