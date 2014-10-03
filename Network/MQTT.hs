@@ -170,26 +170,33 @@ defaultConfig = MQTTConfig
 connect :: MQTTConfig -> IO (Maybe MQTT)
 connect conf = do
     h <- connectTo (cHost conf) (PortNumber $ cPort conf)
-    mqtt <- MQTT conf
-              <$> newMVar h
-              <*> newMVar []
-              <*> newMVar []
-              <*> newEmptyMVar
-              <*> newEmptyMVar
-              <*> newEmptyMVar
-              <*> for (cKeepAlive conf) (const newEmptyMVar)
-    onException
-      (do
-        hSetBinaryMode h True
-        mCode <- handshake mqtt
-        if mCode == Just 0
-          then Just mqtt <$ do forkIO (recvLoop mqtt) >>=
-                                 putMVar (recvThread mqtt)
-                               forkIO (keepAliveLoop mqtt) >>=
-                                 putMVar (keepAliveThread mqtt)
-                               addHandler mqtt (publishHandler mqtt)
-          else Nothing <$ hClose h)
-      (disconnect mqtt)
+    mqtt <- mkMQTT conf h
+    setup mqtt `onException` disconnect mqtt
+
+-- | Create an uninitialized 'MQTT'.
+mkMQTT :: MQTTConfig -> Handle -> IO MQTT
+mkMQTT conf h = MQTT conf
+                  <$> newMVar h
+                  <*> newMVar []
+                  <*> newMVar []
+                  <*> newEmptyMVar
+                  <*> newEmptyMVar
+                  <*> newEmptyMVar
+                  <*> for (cKeepAlive conf) (const newEmptyMVar)
+
+-- | Handshake with the broker and start threads.
+setup :: MQTT -> IO (Maybe MQTT)
+setup mqtt = do
+    h <- readMVar (handle mqtt)
+    hSetBinaryMode h True
+    mCode <- handshake mqtt
+    if mCode == Just 0
+      then Just mqtt <$ do startThreads; addHandler mqtt (publishHandler mqtt)
+      else Nothing <$ hClose h
+  where
+    startThreads = do
+      forkIO (recvLoop mqtt) >>= putMVar (recvThread mqtt)
+      for (keepAliveLoop mqtt) $ putMVar (keepAliveThread mqtt) <=< forkIO
 
 -- | Send a 'Message' to the server.
 --
@@ -473,14 +480,15 @@ dispatchMessage mqtt (SomeMessage msg) =
         Proved Refl -> void $ forkIO $ handler msg
         Disproved _ -> return ()
 
--- | Block on a @MVar ()@ that is written to by 'send'. If a timeout occurs
--- while waiting, send a 'PINGREQ' to the server and wait for PINGRESP.
---
--- Returns immediately if no Keep Alive is specified.
-keepAliveLoop :: MQTT -> IO ()
-keepAliveLoop mqtt =
-    maybe (return ()) (loopWithReconnect mqtt "keepAliveLoop") $
-      loopBody <$> cKeepAlive (config mqtt) <*> sendSignal mqtt
+-- | Returns 'Nothing' if no Keep Alive is specified.
+-- Otherwise returns a loop that blocks on an @MVar ()@ that is written to by
+-- 'send'. If the Keep Alive period runs out while waiting, send a 'PINGREQ'
+-- to the server and wait for PINGRESP.
+keepAliveLoop :: MQTT -> Maybe (IO ())
+keepAliveLoop mqtt = do
+    period <- cKeepAlive (config mqtt)
+    sig <- sendSignal mqtt
+    return $ loopWithReconnect mqtt "keepAliveLoop" (loopBody period sig)
   where
     loopBody period mvar mqtt = do
       rslt <- timeout (period * 1000000) $ takeMVar mvar
