@@ -348,13 +348,19 @@ publish mqtt qos retain topic body = do
 disconnect :: MQTT -> IO ()
 disconnect mqtt = mask_ $ do
     h <- takeMVar $ handle mqtt
-    writeTo h $
-      Message
-        (Header False NoConfirm False)
-        MDisconnect
+    writeTo h (Message (Header False NoConfirm False) MDisconnect)
+      `catch` \e -> do
+        logWarning mqtt $ show $
+          annotateIOError e "disconnect/writeTo" (Just h) Nothing
+        logWarning mqtt "Continuing disconnect."
     tryReadMVar (recvThread mqtt) >>= traverse_ killThread
     tryReadMVar (keepAliveThread mqtt) >>= traverse_ killThread
     hClose h
+      `catch` \e -> do
+        logWarning mqtt $ show $
+          annotateIOError e "disconnect/hClose" (Just h) Nothing
+        logWarning mqtt "Continuing disconnect."
+    logInfo mqtt "Disconnected."
 
 -- | Try creating a new connection with the same config (retrying after the
 -- specified amount of seconds has passed) and invoke the callback that is
