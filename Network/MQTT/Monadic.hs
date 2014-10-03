@@ -10,8 +10,9 @@ in a 'MonadReader'.
 
 For documentation see the corresponding functions in @Network.MQTT@.
 
-A note on the functions using 'MonadBaseControl': Any changes to the monadic
-state are discarded, the functions are only called for their side-effects.
+A note on the functions taking callbacks:
+__Any changes to the monadic state in a callback are discarded__, the functions
+are only called for their side-effects.
 -}
 module Network.MQTT.Monadic
   ( HasMQTT(..)
