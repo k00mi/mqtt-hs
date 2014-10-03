@@ -4,7 +4,20 @@ Copyright: Lukas Braun 2014
 License: GPL-3
 Maintainer: koomi+mqtt@hackerspace-bamberg.de
 
-A simple logger abstraction.
+A simple logger abstraction. This makes it easy to configure what and how to log.
+For example, one might want to log everything to stdout/err while testing but
+log to syslog and suppress debug messages in production:
+
+> syslogLogger = Logger
+>                 { logDebug = syslog Debug
+>                 , logInfo = syslog Info
+>                 , logWarning = syslog Warning
+>                 , logError = syslog Error
+>                 }
+>
+> prodLogger = info syslogLogger
+>
+> testLogger = stdLogger
 -}
 module Network.MQTT.Logger where
 
