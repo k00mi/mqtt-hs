@@ -1,4 +1,4 @@
-{-# Language OverloadedStrings, GADTs #-}
+{-# Language OverloadedStrings, GADTs, DataKinds #-}
 {-|
 Module: MQTT.Parsers
 Copyright: Lukas Braun 2014
@@ -90,23 +90,23 @@ mqttBody :: SingI t
 mqttBody header msgType remaining =
     let parser =
           case msgType of
-            SCONNECT     -> MConnect     <$> connect
-            SCONNACK     -> MConnAck     <$> connAck
-            SPUBLISH     -> MPublish     <$> publish header
-            SPUBACK      -> MPubAck      <$> simpleMsg
-            SPUBREC      -> MPubRec      <$> simpleMsg
-            SPUBREL      -> MPubRel      <$> simpleMsg
-            SPUBCOMP     -> MPubComp     <$> simpleMsg
-            SSUBSCRIBE   -> MSubscribe   <$> subscribe
-            SSUBACK      -> MSubAck      <$> subAck
-            SUNSUBSCRIBE -> MUnsubscribe <$> unsubscribe
-            SUNSUBACK    -> MUnsubAck    <$> simpleMsg
-            SPINGREQ     -> pure MPingReq
-            SPINGRESP    -> pure MPingResp
-            SDISCONNECT  -> pure MDisconnect
+            SCONNECT     -> connect
+            SCONNACK     -> connAck
+            SPUBLISH     -> publish header
+            SPUBACK      -> PubAck  <$> parseMsgID
+            SPUBREC      -> PubRec  <$> parseMsgID
+            SPUBREL      -> PubRel  <$> parseMsgID
+            SPUBCOMP     -> PubComp <$> parseMsgID
+            SSUBSCRIBE   -> subscribe
+            SSUBACK      -> subAck
+            SUNSUBSCRIBE -> unsubscribe
+            SUNSUBACK    -> UnsubAck <$> parseMsgID
+            SPINGREQ     -> pure PingReq
+            SPINGRESP    -> pure PingResp
+            SDISCONNECT  -> pure Disconnect
     in evalStateT parser remaining
 
-connect :: MessageParser Connect
+connect :: MessageParser (MessageBody CONNECT)
 connect = do
     protocol
     version
@@ -156,11 +156,10 @@ connect = do
     parseIf :: Applicative f => Bool -> f a -> f (Maybe a)
     parseIf flag parser = if flag then Just <$> parser else pure Nothing
 
-
-connAck :: MessageParser ConnAck
+connAck :: MessageParser (MessageBody CONNACK)
 connAck = ConnAck <$> anyWord8'
 
-publish :: MqttHeader -> MessageParser Publish
+publish :: MqttHeader -> MessageParser (MessageBody PUBLISH)
 publish header = Publish
                   <$> getTopic
                   <*> (if qos header > NoConfirm
@@ -168,24 +167,21 @@ publish header = Publish
                          else return Nothing)
                   <*> (get >>= take')
 
-subscribe :: MessageParser Subscribe
+subscribe :: MessageParser (MessageBody SUBSCRIBE)
 subscribe = Subscribe
               <$> parseMsgID
               <*> whileM ((0 <) <$> get)
                     ((,) <$> getTopic <*> (anyWord8' >>= toQoS))
 
-subAck :: MessageParser SubAck
+subAck :: MessageParser (MessageBody SUBACK)
 subAck = SubAck
           <$> parseMsgID
           <*> whileM ((0 <) <$> get) (anyWord8' >>= toQoS)
 
-unsubscribe :: MessageParser Unsubscribe
+unsubscribe :: MessageParser (MessageBody UNSUBSCRIBE)
 unsubscribe = Unsubscribe
                 <$> parseMsgID
                 <*> whileM ((0 <) <$> get) getTopic
-
-simpleMsg :: MessageParser SimpleMsg
-simpleMsg = SimpleMsg <$> parseMsgID
 
 
 ---------------------------------

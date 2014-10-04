@@ -1,4 +1,4 @@
-{-# Language OverloadedStrings, RecordWildCards, GADTs #-}
+{-# Language OverloadedStrings, RecordWildCards, GADTs, DataKinds #-}
 {-|
 Module: MQTT.Encoding
 Copyright: Lukas Braun 2014
@@ -71,23 +71,23 @@ encodeRemaining n =
 
 -- | Build the 'MessageBody' for any message type.
 putBody :: MessageBody t -> Builder
-putBody (MConnect connect)          = putConnect      connect
-putBody (MConnAck connAck)          = putConnAck      connAck
-putBody (MPublish publish)          = putPublish      publish
-putBody (MPubAck simpleMsg)         = putSimple       simpleMsg
-putBody (MPubRec simpleMsg)         = putSimple       simpleMsg
-putBody (MPubRel simpleMsg)         = putSimple       simpleMsg
-putBody (MPubComp simpleMsg)        = putSimple       simpleMsg
-putBody (MSubscribe subscribe)      = putSubscribe    subscribe
-putBody (MSubAck subAck)            = putSubAck       subAck
-putBody (MUnsubscribe unsubscribe)  = putUnsubscribe  unsubscribe
-putBody (MUnsubAck simpleMsg)       = putSimple       simpleMsg
-putBody MPingReq                    = mempty
-putBody MPingResp                   = mempty
-putBody MDisconnect                 = mempty
+putBody (m@Connect{})      = putConnect m
+putBody (m@ConnAck {})     = putConnAck m
+putBody (m@Publish{})      = putPublish m
+putBody (PubAck m)         = putMsgID m
+putBody (PubRec m)         = putMsgID m
+putBody (PubRel m)         = putMsgID m
+putBody (PubComp m)        = putMsgID m
+putBody (m@Subscribe{})    = putSubscribe m
+putBody (m@SubAck{})       = putSubAck m
+putBody (m@Unsubscribe{})  = putUnsubscribe m
+putBody (UnsubAck m)       = putMsgID m
+putBody PingReq            = mempty
+putBody PingResp           = mempty
+putBody Disconnect         = mempty
 
 
-putConnect :: Connect -> Builder
+putConnect :: MessageBody CONNECT -> Builder
 putConnect Connect{..} = mconcat
     [ putMqttText "MQIsdp" -- protocol
     , word8 3 -- version
@@ -109,11 +109,11 @@ putConnect Connect{..} = mconcat
             shiftL (toBit cleanSession) 1
 
 
-putConnAck :: ConnAck -> Builder
+putConnAck :: MessageBody CONNACK -> Builder
 putConnAck = word8 . returnCode
 
 
-putPublish :: Publish -> Builder
+putPublish :: MessageBody PUBLISH -> Builder
 putPublish Publish{..} = mconcat
     [ putTopic topic
     , maybe mempty putMsgID pubMsgID
@@ -121,27 +121,24 @@ putPublish Publish{..} = mconcat
     ]
 
 
-putSubscribe :: Subscribe -> Builder
+putSubscribe :: MessageBody SUBSCRIBE -> Builder
 putSubscribe Subscribe{..} = mconcat
     [ putMsgID subscribeMsgID
     , foldMap (\(txt, qos) -> putTopic txt <> word8 (fromQoS qos)) subTopics
     ]
 
 
-putSubAck :: SubAck -> Builder
+putSubAck :: MessageBody SUBACK -> Builder
 putSubAck SubAck{..} = mconcat
     [ putMsgID subAckMsgID
     , foldMap (word8 . fromQoS) granted
     ]
 
-putUnsubscribe :: Unsubscribe -> Builder
+putUnsubscribe :: MessageBody UNSUBSCRIBE -> Builder
 putUnsubscribe Unsubscribe{..} = mconcat
     [ putMsgID unsubMsgID
     , foldMap putTopic unsubTopics
     ]
-
-putSimple :: SimpleMsg -> Builder
-putSimple = putMsgID . msgID
 
 
 ---------------------------------
@@ -174,17 +171,17 @@ toBit True = 1
 
 -- | Encode the type of a 'MessageBody'.
 msgType :: (Num a) => MessageBody t -> a
-msgType (MConnect _)     = 1
-msgType (MConnAck _)     = 2
-msgType (MPublish _)     = 3
-msgType (MPubAck _)      = 4
-msgType (MPubRec _)      = 5
-msgType (MPubRel _)      = 6
-msgType (MPubComp _)     = 7
-msgType (MSubscribe _)   = 8
-msgType (MSubAck _)      = 9
-msgType (MUnsubscribe _) = 10
-msgType (MUnsubAck _)    = 11
-msgType MPingReq         = 12
-msgType MPingResp        = 13
-msgType MDisconnect      = 14
+msgType (Connect{})     = 1
+msgType (ConnAck{})     = 2
+msgType (Publish{})     = 3
+msgType (PubAck{})      = 4
+msgType (PubRec{})      = 5
+msgType (PubRel{})      = 6
+msgType (PubComp{})     = 7
+msgType (Subscribe{})   = 8
+msgType (SubAck{})      = 9
+msgType (Unsubscribe{}) = 10
+msgType (UnsubAck{})    = 11
+msgType PingReq         = 12
+msgType PingResp        = 13
+msgType Disconnect      = 14

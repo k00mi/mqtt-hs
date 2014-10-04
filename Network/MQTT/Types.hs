@@ -23,15 +23,8 @@ module Network.MQTT.Types
     Message(..)
   , SomeMessage(..)
   , MqttHeader(..)
-  -- * Message bodies
+  -- * Message body
   , MessageBody(..)
-  , Connect(..)
-  , ConnAck(..)
-  , Publish(..)
-  , Subscribe(..)
-  , SubAck(..)
-  , Unsubscribe(..)
-  , SimpleMsg(..)
   -- * Miscellaneous
   , Will(..)
   , QoS(..)
@@ -108,85 +101,51 @@ data MqttHeader
 
 -- | The body of a MQTT message, indexed by the type of the message ('MsgType').
 data MessageBody (t :: MsgType) where
-    MConnect      :: Connect      -> MessageBody CONNECT
-    MConnAck      :: ConnAck      -> MessageBody CONNACK
-    MPublish      :: Publish      -> MessageBody PUBLISH
-    MPubAck       :: SimpleMsg    -> MessageBody PUBACK
-    MPubRec       :: SimpleMsg    -> MessageBody PUBREC
-    MPubRel       :: SimpleMsg    -> MessageBody PUBREL
-    MPubComp      :: SimpleMsg    -> MessageBody PUBCOMP
-    MSubscribe    :: Subscribe    -> MessageBody SUBSCRIBE
-    MSubAck       :: SubAck       -> MessageBody SUBACK
-    MUnsubscribe  :: Unsubscribe  -> MessageBody UNSUBSCRIBE
-    MUnsubAck     :: SimpleMsg    -> MessageBody UNSUBACK
-    MPingReq      ::                 MessageBody PINGREQ
-    MPingResp     ::                 MessageBody PINGRESP
-    MDisconnect   ::                 MessageBody DISCONNECT
+    Connect     :: { cleanSession :: Bool
+                   -- ^ Should the server forget subscriptions and other state on
+                   -- disconnects?
+                   , will :: Maybe Will
+                   -- ^ Optional 'Will' message.
+                   , clientID :: MqttText
+                   -- ^ Client ID used by the server to identify clients.
+                   , username :: Maybe MqttText
+                   -- ^ Optional username used for authentication.
+                   , password :: Maybe MqttText
+                   -- ^ Optional password used for authentication.
+                   , keepAlive :: Word16
+                   -- ^ Maximum interval (in seconds) in which a message must be sent.
+                   -- 0 means no limit.
+                   }                              -> MessageBody CONNECT
+    ConnAck     :: { returnCode :: Word8 }        -> MessageBody CONNACK
+    Publish     :: { topic :: Topic
+                   -- ^ The 'Topic' to which the message should be published.
+                   , pubMsgID :: Maybe MsgID
+                   -- ^ 'MsgID' of the message if 'QoS' > 'NoConfirm'.
+                   , payload :: ByteString
+                   -- ^ The content that will be published.
+                   }                              -> MessageBody PUBLISH
+    PubAck      :: { pubAckMsgID :: MsgID }       -> MessageBody PUBACK
+    PubRec      :: { pubRecMsgID :: MsgID }       -> MessageBody PUBREC
+    PubRel      :: { pubRelMsgID :: MsgID }       -> MessageBody PUBREL
+    PubComp     :: { pubCompMsgID :: MsgID }      -> MessageBody PUBCOMP
+    Subscribe   :: { subscribeMsgID :: MsgID
+                   , subTopics :: [(Topic, QoS)]
+                   -- ^ The 'Topic's and corresponding requested 'QoS'.
+                   }                              -> MessageBody SUBSCRIBE
+    SubAck      :: { subAckMsgID :: MsgID
+                   , granted :: [QoS]
+                   -- ^ The 'QoS' granted for each 'Topic' in the order they were sent
+                   -- in the SUBSCRIBE.
+                   }                              -> MessageBody SUBACK
+    Unsubscribe :: { unsubMsgID :: MsgID
+                   , unsubTopics :: [Topic]
+                   -- ^ The 'Topic's from which the client should be unsubscribed.
+                   }                              -> MessageBody UNSUBSCRIBE
+    UnsubAck    :: { unsubAckMsgID :: MsgID }     -> MessageBody UNSUBACK
+    PingReq     ::                                   MessageBody PINGREQ
+    PingResp    ::                                   MessageBody PINGRESP
+    Disconnect  ::                                   MessageBody DISCONNECT
 
--- | The fields of a CONNECT message.
-data Connect
-    = Connect
-        { cleanSession :: Bool
-        -- ^ Should the server forget subscriptions and other state on
-        -- disconnects?
-        , will :: Maybe Will
-        -- ^ Optional 'Will' message.
-        , clientID :: MqttText
-        -- ^ Client ID used by the server to identify clients.
-        , username :: Maybe MqttText
-        -- ^ Optional username used for authentication.
-        , password :: Maybe MqttText
-        -- ^ Optional password used for authentication.
-        , keepAlive :: Word16
-        -- ^ Maximum interval (in seconds) in which a message must be sent.
-        -- 0 means no limit.
-        } deriving (Show, Eq)
-
--- | The response to a CONNECT. Anything other than 0 means the broker
--- refused the connection
--- (<http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#connack details>).
-newtype ConnAck = ConnAck { returnCode :: Word8 }
-          deriving (Show, Eq)
-
--- | The fields of a PUBLISH message.
-data Publish
-    = Publish
-        { topic :: Topic
-        -- ^ The 'Topic' to which the message should be published.
-        , pubMsgID :: Maybe MsgID
-        -- ^ 'MsgID' of the message if 'QoS' > 'NoConfirm'.
-        , payload :: ByteString
-        -- ^ The content that will be published.
-        } deriving (Show, Eq)
-
--- | The fields of a SUBSCRIBE message.
-data Subscribe
-    = Subscribe
-        { subscribeMsgID :: MsgID
-        , subTopics :: [(Topic, QoS)]
-        -- ^ The 'Topic's and corresponding requested 'QoS'.
-        } deriving (Show, Eq)
-
--- | The fields of a SUBACK message.
-data SubAck
-    = SubAck
-        { subAckMsgID :: MsgID
-        , granted :: [QoS]
-        -- ^ The 'QoS' granted for each 'Topic' in the order they were sent
-        -- in the SUBSCRIBE.
-        } deriving (Show, Eq)
-
--- | The fields of a UNSUBSCRIBE message.
-data Unsubscribe
-    = Unsubscribe
-        { unsubMsgID :: MsgID
-        , unsubTopics :: [Topic]
-        -- ^ The 'Topic's from which the client should be unsubscribed.
-        } deriving (Show, Eq)
-
--- | Any message body that consists only of a 'MsgID'.
-newtype SimpleMsg = SimpleMsg { msgID :: MsgID }
-          deriving (Show, Eq)
 
 -- | The different levels of QoS
 data QoS
@@ -214,20 +173,20 @@ type MsgID = Word16
 
 -- | Get the message ID of any message, if it exists.
 getMsgID :: MessageBody t -> Maybe MsgID
-getMsgID (MConnect _)         = Nothing
-getMsgID (MConnAck _)         = Nothing
-getMsgID (MPublish pub)       = pubMsgID pub
-getMsgID (MPubAck simple)     = Just (msgID simple)
-getMsgID (MPubRec simple)     = Just (msgID simple)
-getMsgID (MPubRel simple)     = Just (msgID simple)
-getMsgID (MPubComp simple)    = Just (msgID simple)
-getMsgID (MSubscribe sub)     = Just (subscribeMsgID sub)
-getMsgID (MSubAck subA)       = Just (subAckMsgID subA)
-getMsgID (MUnsubscribe unsub) = Just (unsubMsgID unsub)
-getMsgID (MUnsubAck simple)   = Just (msgID simple)
-getMsgID MPingReq             = Nothing
-getMsgID MPingResp            = Nothing
-getMsgID MDisconnect          = Nothing
+getMsgID (Connect{})           = Nothing
+getMsgID (ConnAck{})           = Nothing
+getMsgID (Publish _ mMsgid _)  = mMsgid
+getMsgID (PubAck msgid)        = Just msgid
+getMsgID (PubRec msgid)        = Just msgid
+getMsgID (PubRel msgid)        = Just msgid
+getMsgID (PubComp msgid)       = Just msgid
+getMsgID (Subscribe msgid _)   = Just msgid
+getMsgID (SubAck msgid _)      = Just msgid
+getMsgID (Unsubscribe msgid _) = Just msgid
+getMsgID (UnsubAck msgid)      = Just msgid
+getMsgID PingReq               = Nothing
+getMsgID PingResp              = Nothing
+getMsgID Disconnect            = Nothing
 
 -- | A topic is a "hierarchical name space that defines a taxonomy of
 -- information sources for which subscribers can register an interest."

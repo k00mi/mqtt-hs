@@ -220,7 +220,7 @@ handshake mqtt = do
     mMsg <- timeout' (getMessage mqtt)
               `catch` \(_ :: MQTTException) -> throw InvalidResponse
     case mMsg of
-      Just (SomeMessage (Message _ (MConnAck (ConnAck code)))) ->
+      Just (SomeMessage (Message _ (ConnAck code))) ->
         when (code /= 0) $ throw (toConnectError code)
       Just _ -> throw InvalidResponse
       Nothing -> throw Timeout
@@ -231,7 +231,7 @@ sendConnect mqtt = send mqtt connect
     conf = config mqtt
     connect = Message
                 (Header False NoConfirm False)
-                (MConnect $ Connect
+                (Connect
                   (cClean conf)
                   (cWill conf)
                   (MqttText $ cClientID conf)
@@ -302,12 +302,10 @@ sendSubscribe mqtt qos topic = do
     msgID <- fromIntegral . hashUnique <$> newUnique
     send mqtt $ Message
                   (Header False Confirm False)
-                  (MSubscribe $ Subscribe
-                    msgID
-                    [(topic, qos)])
+                  (Subscribe msgID [(topic, qos)])
     msg <- awaitMsg mqtt SSUBACK (Just msgID)
-    case msg of
-      (Message _ (MSubAck (SubAck _ [qosGranted]))) -> return qosGranted
+    case granted $ body $ msg of
+      [qosGranted] -> return qosGranted
       _ -> fail $ "Received invalid message as response to subscribe: "
                     ++ show (toMsgType msg)
 
@@ -315,9 +313,7 @@ sendSubscribe mqtt qos topic = do
 unsubscribe :: MQTT -> Topic -> IO ()
 unsubscribe mqtt topic = do
     msgID <- fromIntegral . hashUnique <$> newUnique
-    send mqtt $ Message
-                  (Header False Confirm False)
-                  (MUnsubscribe $ Unsubscribe msgID [topic])
+    send mqtt $ Message (Header False Confirm False) (Unsubscribe msgID [topic])
     _ <- awaitMsg mqtt SUNSUBACK (Just msgID)
     modifyMVar_ (topicHandlers mqtt) $ return . filter ((/= topic) . thTopic)
 
@@ -333,9 +329,7 @@ publish mqtt qos retain topic body = do
     msgID <- if qos > NoConfirm
                then Just . fromIntegral . hashUnique <$> newUnique
                else return Nothing
-    send mqtt $ Message
-                  (Header False qos retain)
-                  (MPublish $ Publish topic msgID body)
+    send mqtt $ Message (Header False qos retain) (Publish topic msgID body)
     case qos of
       NoConfirm -> return ()
       Confirm   -> void $ awaitMsg mqtt SPUBACK msgID
@@ -343,14 +337,14 @@ publish mqtt qos retain topic body = do
         void $ awaitMsg mqtt SPUBREC msgID
         send mqtt $ Message
                       (Header False Confirm False)
-                      (MPubRel $ SimpleMsg (fromJust msgID))
+                      (PubRel (fromJust msgID))
         void $ awaitMsg mqtt SPUBCOMP msgID
 
 -- | Close the connection to the server.
 disconnect :: MQTT -> IO ()
 disconnect mqtt = mask_ $ do
     h <- takeMVar $ handle mqtt
-    writeTo h (Message (Header False NoConfirm False) MDisconnect)
+    writeTo h (Message (Header False NoConfirm False) Disconnect)
       `catch` \e -> do
         logWarning mqtt $ show $
           annotateIOError e "disconnect/writeTo" (Just h) Nothing
@@ -481,10 +475,9 @@ keepAliveLoop mqtt = do
     loopBody period mvar mqtt = do
       rslt <- timeout (period * 1000000) $ takeMVar mvar
       case rslt of
-        Nothing -> do send mqtt $ Message
-                                   (Header False NoConfirm False)
-                                   MPingReq
-                      void $ awaitMsg mqtt SPINGRESP Nothing
+        Nothing -> do
+          send mqtt $ Message (Header False NoConfirm False) PingReq
+          void $ awaitMsg mqtt SPINGRESP Nothing
         Just _ -> return ()
 
 -- | Forever executes the given @IO@ action. In the case of an 'IOException',
@@ -499,20 +492,14 @@ loopWithReconnect mqtt desc act = catch (forever $ act mqtt) $ \e -> do
     else logError mqtt $ desc ++ ": No reconnect, terminating."
 
 publishHandler :: MQTT -> Message PUBLISH -> IO ()
-publishHandler mqtt (Message header (MPublish body)) = do
+publishHandler mqtt (Message header body) = do
     case (qos header, pubMsgID body) of
       (Confirm, Just msgid) ->
-          send mqtt $ Message
-                        (Header False NoConfirm False)
-                        (MPubAck $ SimpleMsg msgid)
+          send mqtt $ Message (Header False NoConfirm False) (PubAck msgid)
       (Handshake, Just msgid) -> do
-          send mqtt $ Message
-                        (Header False NoConfirm False)
-                        (MPubRec $ SimpleMsg msgid)
+          send mqtt $ Message (Header False NoConfirm False) (PubRec msgid)
           void $ awaitMsg mqtt SPUBREL (Just msgid)
-          send mqtt $ Message
-                        (Header False NoConfirm False)
-                        (MPubComp $ SimpleMsg msgid)
+          send mqtt $ Message (Header False NoConfirm False) (PubComp msgid)
       _ -> return ()
     callbacks <- filter (matches (topic body) . thTopic)
                    <$> readMVar (topicHandlers mqtt)
