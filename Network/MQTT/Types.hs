@@ -99,8 +99,7 @@ data SomeMessage where
 -- | Fixed header required in every message.
 data MqttHeader
     = Header
-        { -- msgType :: MsgType  -- ^ Type of the message
-          dup :: Bool         -- ^ Has this message been sent before?
+        { dup :: Bool         -- ^ Has this message been sent before?
         , qos :: QoS          -- ^ Quality of Service-level
         , retain :: Bool      -- ^ Should the broker retain the message for
                               -- future subscribers?
