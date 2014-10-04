@@ -87,7 +87,7 @@ onReconnect action = do
     mqtt <- asks getMQTT
     liftBaseDiscard (MQTT.onReconnect mqtt) action
 
-resubscribe :: MonadMQTT r m => m (Maybe [QoS])
+resubscribe :: MonadMQTT r m => m [QoS]
 resubscribe = asks getMQTT >>= liftIO . MQTT.resubscribe
 
 subscribe :: (MonadBaseControl IO m, MonadMQTT r m)

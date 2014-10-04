@@ -411,15 +411,11 @@ onReconnect mqtt io = do
     _ <- tryTakeMVar mvar
     putMVar mvar io
 
--- | Resubscribe to all subscribed topics if the connection is clean.
--- Returns the new list of granted 'QoS'.
-resubscribe :: MQTT -> IO (Maybe [QoS])
-resubscribe mqtt =
-  if cClean $ config mqtt
-    then Just <$> do
-      ths <- readMVar (topicHandlers mqtt)
-      mapM (\th -> sendSubscribe mqtt (thQoS th) (thTopic th)) ths
-    else return Nothing
+-- | Resubscribe to all topics. Returns the new list of granted 'QoS'.
+resubscribe :: MQTT -> IO [QoS]
+resubscribe mqtt = do
+    ths <- readMVar (topicHandlers mqtt)
+    mapM (\th -> sendSubscribe mqtt (thQoS th) (thTopic th)) ths
 
 -- | Close the handle and initiate a reconnect, if 'cReconnPeriod' is set.
 maybeReconnect :: MQTT -> IO Bool
