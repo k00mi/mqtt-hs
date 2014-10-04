@@ -314,12 +314,12 @@ sendSubscribe mqtt qos topic = do
 -- | Unsubscribe from the given 'Topic' and remove any handlers.
 unsubscribe :: MQTT -> Topic -> IO ()
 unsubscribe mqtt topic = do
-    modifyMVar_ (topicHandlers mqtt) $ return . filter ((== topic) . thTopic)
     msgID <- fromIntegral . hashUnique <$> newUnique
     send mqtt $ Message
                   (Header False Confirm False)
                   (MUnsubscribe $ Unsubscribe msgID [topic])
-    void $ awaitMsg mqtt SUNSUBACK (Just msgID)
+    _ <- awaitMsg mqtt SUNSUBACK (Just msgID)
+    modifyMVar_ (topicHandlers mqtt) $ return . filter ((== topic) . thTopic)
 
 -- | Publish a message to the given 'Topic' at the requested 'QoS' level.
 -- The payload can be any sequence of bytes, including none at all. The 'Bool'
