@@ -319,7 +319,7 @@ unsubscribe mqtt topic = do
                   (Header False Confirm False)
                   (MUnsubscribe $ Unsubscribe msgID [topic])
     _ <- awaitMsg mqtt SUNSUBACK (Just msgID)
-    modifyMVar_ (topicHandlers mqtt) $ return . filter ((== topic) . thTopic)
+    modifyMVar_ (topicHandlers mqtt) $ return . filter ((/= topic) . thTopic)
 
 -- | Publish a message to the given 'Topic' at the requested 'QoS' level.
 -- The payload can be any sequence of bytes, including none at all. The 'Bool'
