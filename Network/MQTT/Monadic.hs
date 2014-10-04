@@ -73,7 +73,7 @@ instance HasMQTT MQTT where
 -- | The constraint most of the functions in this module have in common.
 type MonadMQTT r m = (HasMQTT r, MonadReader r m, MonadIO m)
 
-connect :: MonadIO m => MQTT.MQTTConfig -> m (Maybe MQTT)
+connect :: MonadIO m => MQTT.MQTTConfig -> m MQTT
 connect = liftIO . MQTT.connect
 
 disconnect :: MonadMQTT r m => m ()

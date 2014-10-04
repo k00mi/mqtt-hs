@@ -1,4 +1,5 @@
 {-# Language GeneralizedNewtypeDeriving,
+             DeriveDataTypeable,
              PatternSynonyms,
              OverloadedStrings,
              DataKinds,
@@ -43,6 +44,8 @@ module Network.MQTT.Types
   , getLevels
   , fromLevels
   , MqttText(..)
+  , ConnectError(..)
+  , toConnectError
   -- * Message types
   , MsgType(..)
   , toMsgType
@@ -73,11 +76,13 @@ module Network.MQTT.Types
         , SDISCONNECT)
   ) where
 
+import Control.Exception (Exception)
 import Data.ByteString (ByteString)
 import Data.Singletons.TH
 import Data.String (IsString(..))
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Typeable (Typeable)
 import Data.Word
 
 -- | A MQTT message, indexed by the type of the message ('MsgType').
@@ -269,6 +274,29 @@ fromLevels ls = Topic ls (T.intercalate "/" ls)
 instance IsString Topic where
     fromString str = let txt = T.pack str in
       Topic (T.split (== '/') txt) txt
+
+-- | Reasons connecting to a broker might fail.
+data ConnectError
+    = WrongProtocolVersion
+    | IdentifierRejected
+    | ServerUnavailable
+    | BadLogin
+    | Unauthorized
+    | UnrecognizedReturnCode
+    | Timeout
+    | InvalidResponse
+    deriving (Show, Typeable)
+
+instance Exception ConnectError where
+
+-- | Convert a return code to a 'ConnectError'.
+toConnectError :: Word8 -> ConnectError
+toConnectError 1 = WrongProtocolVersion
+toConnectError 2 = IdentifierRejected
+toConnectError 3 = ServerUnavailable
+toConnectError 4 = BadLogin
+toConnectError 5 = Unauthorized
+toConnectError _ = UnrecognizedReturnCode
 
 -- | The various types of messages.
 data MsgType

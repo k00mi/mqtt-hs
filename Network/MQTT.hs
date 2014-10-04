@@ -165,13 +165,12 @@ defaultConfig = MQTTConfig
     }
 
 
--- | Establish a connection. This might fail with an 'IOException' or
--- return 'Nothing' if the server did not accept the connection.
-connect :: MQTTConfig -> IO (Maybe MQTT)
+-- | Establish a connection. Might throw an 'IOException' or a 'ConnectError'.
+connect :: MQTTConfig -> IO MQTT
 connect conf = do
     h <- connectTo (cHost conf) (PortNumber $ cPort conf)
     mqtt <- mkMQTT conf h
-    setup mqtt `onException` disconnect mqtt
+    (mqtt <$ setup mqtt) `onException` disconnect mqtt
 
 -- | Create an uninitialized 'MQTT'.
 mkMQTT :: MQTTConfig -> Handle -> IO MQTT
@@ -185,18 +184,14 @@ mkMQTT conf h = MQTT conf
                   <*> for (cKeepAlive conf) (const newEmptyMVar)
 
 -- | Handshake with the broker and start threads.
-setup :: MQTT -> IO (Maybe MQTT)
+setup :: MQTT -> IO ()
 setup mqtt = do
     h <- readMVar (handle mqtt)
     hSetBinaryMode h True
-    mCode <- handshake mqtt
-    if mCode == Just 0
-      then Just mqtt <$ do startThreads; addHandler mqtt (publishHandler mqtt)
-      else Nothing <$ hClose h
-  where
-    startThreads = do
-      forkIO (recvLoop mqtt) >>= putMVar (recvThread mqtt)
-      for (keepAliveLoop mqtt) $ putMVar (keepAliveThread mqtt) <=< forkIO
+    handshake mqtt
+    addHandler mqtt (publishHandler mqtt)
+    forkIO (recvLoop mqtt) >>= putMVar (recvThread mqtt)
+    for_ (keepAliveLoop mqtt) $ putMVar (keepAliveThread mqtt) <=< forkIO
 
 -- | Send a 'Message' to the server.
 --
@@ -216,17 +211,19 @@ send mqtt msg = do
          then send mqtt msg
          else throw e
 
-handshake :: MQTT -> IO (Maybe Word8)
+handshake :: MQTT -> IO ()
 handshake mqtt = do
-    let timeout' = maybe (fmap Just) (timeout . (* 1000000))
-                     (cConnectTimeout (config mqtt))
+    let timeout' = case cConnectTimeout (config mqtt) of
+                     Nothing -> fmap Just
+                     Just t -> timeout (t * 1000000)
     sendConnect mqtt
-    msg <- timeout' (getMessage mqtt) `catch` \e ->
-             Nothing <$ logError mqtt (show (e :: MQTTException) ++
-                                      " while waiting for CONNACK")
-    return $ case msg of
-      Just (SomeMessage (Message _ (MConnAck (ConnAck code)))) -> Just code
-      _ ->  Nothing
+    mMsg <- timeout' (getMessage mqtt)
+              `catch` \(_ :: MQTTException) -> throw InvalidResponse
+    case mMsg of
+      Just (SomeMessage (Message _ (MConnAck (ConnAck code)))) ->
+        when (code /= 0) $ throw (toConnectError code)
+      Just _ -> throw InvalidResponse
+      Nothing -> throw Timeout
 
 sendConnect :: MQTT -> IO ()
 sendConnect mqtt = send mqtt connect
@@ -393,22 +390,17 @@ reconnect mqtt period = do
         let conf = config mqtt
         connectTo (cHost conf) (PortNumber $ cPort conf)
           >>= putMVar (handle mqtt')
-        mCode <- handshake mqtt'
-        unless (mCode == Just 0) $ do
-          void $ takeMVar (handle mqtt')
-          threadDelay (period * 10^6)
-          go mqtt'
+        handshake mqtt'
       `catches`
         let logAndRetry :: Exception e => e -> IO ()
             logAndRetry e = do
-              _ <- tryTakeMVar (handle mqtt')
+              mh <- tryTakeMVar (handle mqtt')
+              for mh $ \h -> hClose h `catch` \(e :: IOException) -> return ()
               logWarning mqtt $ "reconnect: " ++ show e
               threadDelay (period * 10^6)
               go mqtt'
         in [ Handler $ \e -> logAndRetry (e :: IOException)
-           , Handler $ \e -> do
-               tryTakeMVar (handle mqtt') >>= traverse_ hClose
-               logAndRetry (e :: MQTTException)
+           , Handler $ \e -> logAndRetry (e :: ConnectError)
            ]
 
 -- | Register a callback that will be invoked when a reconnect has
