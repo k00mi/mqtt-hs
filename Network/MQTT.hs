@@ -77,6 +77,8 @@ import Data.Traversable (for)
 import Data.Typeable (Typeable)
 import Data.Unique
 import Data.Word
+import GHC.Event (getSystemTimerManager, TimeoutKey, registerTimeout,
+                 unregisterTimeout, updateTimeout)
 import Network
 import Prelude hiding (sequence_)
 import System.IO (Handle, hClose, hIsEOF, hSetBinaryMode)
@@ -101,8 +103,7 @@ data MQTT
         , topicHandlers :: MVar [TopicHandler]
         , recvThread :: MVar ThreadId
         , reconnectHandler :: MVar (IO ())
-        , keepAliveThread :: MVar ThreadId
-        , sendSignal :: Maybe (MVar ()) -- Nothing if keep alive is 0
+        , keepAliveTimer :: MVar TimeoutKey
         }
 
 data TopicHandler
@@ -181,7 +182,6 @@ mkMQTT conf h = MQTT conf
                   <*> newEmptyMVar
                   <*> newEmptyMVar
                   <*> newEmptyMVar
-                  <*> for (cKeepAlive conf) (const newEmptyMVar)
 
 -- | Handshake with the broker and start threads.
 setup :: MQTT -> IO ()
@@ -191,7 +191,18 @@ setup mqtt = do
     handshake mqtt
     addHandler mqtt (publishHandler mqtt)
     forkIO (recvLoop mqtt) >>= putMVar (recvThread mqtt)
-    for_ (keepAliveLoop mqtt) $ putMVar (keepAliveThread mqtt) <=< forkIO
+    for_ (cKeepAlive (config mqtt)) $ regKeepAlive mqtt
+
+-- | Register the keep alive timer and reregister once it triggers.
+regKeepAlive :: MQTT -> Int -> IO ()
+regKeepAlive mqtt us = do
+    tm <- getSystemTimerManager
+    tk <- registerTimeout tm (us * 10^6) $ do
+      send mqtt $ Message (Header False NoConfirm False) PingReq
+      void $ awaitMsg mqtt SPINGRESP Nothing
+      regKeepAlive mqtt us
+    _ <- tryTakeMVar (keepAliveTimer mqtt)
+    putMVar (keepAliveTimer mqtt) tk
 
 -- | Send a 'Message' to the server.
 --
@@ -201,8 +212,12 @@ send :: SingI t => MQTT -> Message t -> IO ()
 send mqtt msg = do
     logDebug mqtt $ "Sending " ++ show (toMsgType msg)
     h <- readMVar (handle mqtt)
+    for_ (cKeepAlive (config mqtt)) $ \to -> do
+      mTK <- tryReadMVar (keepAliveTimer mqtt)
+      for_ mTK $ \tk -> do
+        tm <- getSystemTimerManager
+        updateTimeout tm tk (to * 10^6)
     writeTo h msg
-    for_ (sendSignal mqtt) $ flip tryPutMVar ()
   `catch`
     \e -> do
       logError mqtt $ "send: Caught " ++ show (e :: IOException)
@@ -350,7 +365,8 @@ disconnect mqtt = mask_ $ do
           annotateIOError e "disconnect/writeTo" (Just h) Nothing
         logWarning mqtt "Continuing disconnect."
     tryReadMVar (recvThread mqtt) >>= traverse_ killThread
-    tryReadMVar (keepAliveThread mqtt) >>= traverse_ killThread
+    tm <- getSystemTimerManager
+    tryReadMVar (keepAliveTimer mqtt) >>= traverse_ (unregisterTimeout tm)
     hClose h
       `catch` \e -> do
         logWarning mqtt $ show $
@@ -461,24 +477,6 @@ dispatchMessage mqtt (SomeMessage msg) =
       case toSMsgType msg %~ (sing :: SMsgType t') of
         Proved Refl -> void $ forkIO $ handler msg
         Disproved _ -> return ()
-
--- | Returns 'Nothing' if no Keep Alive is specified.
--- Otherwise returns a loop that blocks on an @MVar ()@ that is written to by
--- 'send'. If the Keep Alive period runs out while waiting, send a 'PINGREQ'
--- to the server and wait for PINGRESP.
-keepAliveLoop :: MQTT -> Maybe (IO ())
-keepAliveLoop mqtt = do
-    period <- cKeepAlive (config mqtt)
-    sig <- sendSignal mqtt
-    return $ loopWithReconnect mqtt "keepAliveLoop" (loopBody period sig)
-  where
-    loopBody period mvar mqtt = do
-      rslt <- timeout (period * 1000000) $ takeMVar mvar
-      case rslt of
-        Nothing -> do
-          send mqtt $ Message (Header False NoConfirm False) PingReq
-          void $ awaitMsg mqtt SPINGRESP Nothing
-        Just _ -> return ()
 
 -- | Forever executes the given @IO@ action. In the case of an 'IOException',
 -- a reconnect is initiated if 'cReconnPeriod' is set, otherwise the action
