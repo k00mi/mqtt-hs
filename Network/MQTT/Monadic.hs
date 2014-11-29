@@ -46,8 +46,9 @@ module Network.MQTT.Monadic
   , send
   , addHandler
   , removeHandler
-  , awaitMsg
-  , awaitMsg'
+  , sendAwait
+  , doAwait
+  , doAwait'
   -- * Reexports
   , module Network.MQTT.Types
   ) where
@@ -121,12 +122,18 @@ removeHandler :: MonadMQTT r m
               => Unique -> m ()
 removeHandler mhID = asks getMQTT >>= liftIO . flip MQTT.removeHandler mhID
 
-awaitMsg :: (MonadMQTT r m, SingI t)
-         => SMsgType t -> Maybe MsgID -> m (Message t)
-awaitMsg mtype mID = do
+doAwait :: (MonadBaseControl IO m, MonadMQTT r m, SingI t)
+        => m () -> SMsgType t -> Maybe MsgID -> m (Message t)
+doAwait io mtype mMsgID = do
     mqtt <- asks getMQTT
-    liftIO $ MQTT.awaitMsg mqtt mtype mID
+    liftBaseDiscard (\io' -> MQTT.doAwait mqtt io' mtype mMsgID) io
 
-awaitMsg' :: (MonadMQTT r m, SingI t)
-          => Maybe MsgID -> m (Message t)
-awaitMsg' = awaitMsg sing
+doAwait' :: (MonadBaseControl IO m, MonadMQTT r m, SingI t)
+          => m () -> Maybe MsgID -> m (Message t)
+doAwait' io = doAwait io sing
+
+sendAwait :: (MonadMQTT r m, SingI t, SingI t')
+          => Message t -> SMsgType t' -> Maybe MsgID -> m (Message t')
+sendAwait msg responseT mMsgID = do
+    mqtt <- asks getMQTT
+    liftIO $ MQTT.sendAwait mqtt msg responseT mMsgID

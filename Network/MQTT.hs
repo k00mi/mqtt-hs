@@ -51,11 +51,12 @@ module Network.MQTT
   , unsubscribe
   , publish
   -- * Sending and receiving 'Message's
+  , sendAwait
   , send
+  , doAwait
+  , doAwait'
   , addHandler
   , removeHandler
-  , awaitMsg
-  , awaitMsg'
   -- * Reexports
   , module Network.MQTT.Types
   ) where
@@ -198,8 +199,9 @@ regKeepAlive :: MQTT -> Int -> IO ()
 regKeepAlive mqtt us = do
     tm <- getSystemTimerManager
     tk <- registerTimeout tm (us * 10^6) $ do
-      send mqtt $ Message (Header False NoConfirm False) PingReq
-      void $ awaitMsg mqtt SPINGRESP Nothing
+      sendAwait mqtt
+        (Message (Header False NoConfirm False) PingReq)
+        SPINGRESP Nothing
       regKeepAlive mqtt us
     _ <- tryTakeMVar (keepAliveTimer mqtt)
     putMVar (keepAliveTimer mqtt) tk
@@ -254,14 +256,15 @@ sendConnect mqtt = send mqtt connect
                   (MqttText <$> cPassword conf)
                   (maybe 0 fromIntegral $ cKeepAlive conf))
 
--- | Block until a 'Message' of the given type, optionally with the given
--- 'MsgID', arrives.
+-- | Execute an @IO@ action and immediately wait for a response, avoiding
+-- race conditions.
 --
 -- Note this expects a singleton to guarantee the returned 'Message' is of
 -- the 'MsgType' that is being waited for. Singleton constructors are the
 -- 'MsgType' constructors prefixed with a capital @S@, e.g. 'SPUBLISH'.
-awaitMsg :: SingI t => MQTT -> SMsgType t -> Maybe MsgID -> IO (Message t)
-awaitMsg mqtt _ mMsgID = do
+doAwait :: SingI t
+        => MQTT -> IO () -> SMsgType t -> Maybe MsgID -> IO (Message t)
+doAwait mqtt io _ mMsgID = do
     var <- newEmptyMVar
     bracket
       (addHandler mqtt (putMVar var))
@@ -274,12 +277,19 @@ awaitMsg mqtt _ mMsgID = do
                        then return msg
                        else wait
                 else return msg
-        in wait)
+        in io >> wait)
 
--- | A version of 'awaitMsg' that infers the type of the 'Message' that
+-- | A version of 'doAwait' that infers the type of the 'Message' that
 -- is expected.
-awaitMsg' :: SingI t => MQTT -> Maybe MsgID -> IO (Message t)
-awaitMsg' mqtt mMsgID = awaitMsg mqtt sing mMsgID
+doAwait' :: SingI t => MQTT -> IO () -> Maybe MsgID -> IO (Message t)
+doAwait' mqtt io mMsgID = doAwait mqtt io sing mMsgID
+
+-- | Execute the common pattern of sending a message and awaiting
+-- a response in a safe, non-racy way.
+sendAwait :: (SingI t, SingI r)
+          => MQTT -> Message t -> SMsgType r -> Maybe MsgID -> IO (Message r)
+sendAwait mqtt msg responseT mMsgID =
+    doAwait mqtt (send mqtt msg) responseT mMsgID
 
 -- | Register a callback that gets invoked whenever a 'Message' of the
 -- expected 'MsgType' is received. Returns the ID of the handler which can be
@@ -315,10 +325,11 @@ subscribe mqtt qos topic handler = do
 sendSubscribe :: MQTT -> QoS -> Topic -> IO QoS
 sendSubscribe mqtt qos topic = do
     msgID <- fromIntegral . hashUnique <$> newUnique
-    send mqtt $ Message
-                  (Header False Confirm False)
-                  (Subscribe msgID [(topic, qos)])
-    msg <- awaitMsg mqtt SSUBACK (Just msgID)
+    msg <- sendAwait mqtt
+             (Message
+               (Header False Confirm False)
+               (Subscribe msgID [(topic, qos)]))
+             SSUBACK (Just msgID)
     case granted $ body $ msg of
       [qosGranted] -> return qosGranted
       _ -> fail $ "Received invalid message as response to subscribe: "
@@ -328,8 +339,9 @@ sendSubscribe mqtt qos topic = do
 unsubscribe :: MQTT -> Topic -> IO ()
 unsubscribe mqtt topic = do
     msgID <- fromIntegral . hashUnique <$> newUnique
-    send mqtt $ Message (Header False Confirm False) (Unsubscribe msgID [topic])
-    _ <- awaitMsg mqtt SUNSUBACK (Just msgID)
+    _ <- sendAwait mqtt
+           (Message (Header False Confirm False) (Unsubscribe msgID [topic]))
+           SUNSUBACK (Just msgID)
     modifyMVar_ (topicHandlers mqtt) $ return . filter ((/= topic) . thTopic)
 
 -- | Publish a message to the given 'Topic' at the requested 'QoS' level.
@@ -344,16 +356,16 @@ publish mqtt qos retain topic body = do
     msgID <- if qos > NoConfirm
                then Just . fromIntegral . hashUnique <$> newUnique
                else return Nothing
-    send mqtt $ Message (Header False qos retain) (Publish topic msgID body)
+    let pub = Message (Header False qos retain) (Publish topic msgID body)
     case qos of
-      NoConfirm -> return ()
-      Confirm   -> void $ awaitMsg mqtt SPUBACK msgID
+      NoConfirm -> send mqtt pub
+      Confirm   -> void $ sendAwait mqtt pub SPUBACK msgID
       Handshake -> do
-        void $ awaitMsg mqtt SPUBREC msgID
-        send mqtt $ Message
-                      (Header False Confirm False)
-                      (PubRel (fromJust msgID))
-        void $ awaitMsg mqtt SPUBCOMP msgID
+        void $ sendAwait mqtt pub SPUBREC msgID
+        void $ sendAwait mqtt
+                 (Message (Header False Confirm False)
+                          (PubRel (fromJust msgID)))
+                 SPUBCOMP msgID
 
 -- | Close the connection to the server.
 disconnect :: MQTT -> IO ()
@@ -495,8 +507,9 @@ publishHandler mqtt (Message header body) = do
       (Confirm, Just msgid) ->
           send mqtt $ Message (Header False NoConfirm False) (PubAck msgid)
       (Handshake, Just msgid) -> do
-          send mqtt $ Message (Header False NoConfirm False) (PubRec msgid)
-          void $ awaitMsg mqtt SPUBREL (Just msgid)
+          sendAwait mqtt
+            (Message (Header False NoConfirm False) (PubRec msgid))
+            SPUBREL (Just msgid)
           send mqtt $ Message (Header False NoConfirm False) (PubComp msgid)
       _ -> return ()
     callbacks <- filter (matches (topic body) . thTopic)
