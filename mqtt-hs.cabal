@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                mqtt-hs
-version:             0.2.0
+version:             0.3.0
 synopsis:            A MQTT client library.
 homepage:            http://github.com/k00mi/mqtt-hs
 license:             GPL-3
