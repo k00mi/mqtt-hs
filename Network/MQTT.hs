@@ -354,14 +354,14 @@ publish mqtt qos retain topic body = do
 -- | Close the connection to the server.
 disconnect :: MQTT -> IO ()
 disconnect mqtt = mask_ $ do
+    tryReadMVar (recvThread mqtt) >>= traverse_ killThread
+    tryReadMVar (keepAliveThread mqtt) >>= traverse_ killThread
     h <- takeMVar $ handle mqtt
     writeTo h (Message (Header False NoConfirm False) Disconnect)
       `catch` \e -> do
         logWarning mqtt $ show $
           annotateIOError e "disconnect/writeTo" (Just h) Nothing
         logWarning mqtt "Continuing disconnect."
-    tryReadMVar (recvThread mqtt) >>= traverse_ killThread
-    tryReadMVar (keepAliveThread mqtt) >>= traverse_ killThread
     hClose h
       `catch` \e -> do
         logWarning mqtt $ show $
