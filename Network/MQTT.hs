@@ -30,7 +30,6 @@ module Network.MQTT
   , disconnect
   , reconnect
   , onReconnect
-  , resubscribe
   -- * Connection settings
   , MQTTConfig
   , defaultConfig
@@ -109,7 +108,6 @@ data MQTT
 data TopicHandler
     = TopicHandler
         { thTopic :: Topic
-        , thQoS :: QoS
         , thHandler :: Topic -> ByteString -> IO ()
         }
 
@@ -303,7 +301,7 @@ subscribe :: MQTT -> QoS -> Topic -> (Topic -> ByteString -> IO ())
 subscribe mqtt qos topic handler = do
     qosGranted <- sendSubscribe mqtt qos topic
     modifyMVar_ (topicHandlers mqtt) $ \hs ->
-      return $ TopicHandler topic qosGranted handler : hs
+      return $ TopicHandler topic handler : hs
     return qosGranted
 
 sendSubscribe :: MQTT -> QoS -> Topic -> IO QoS
@@ -415,12 +413,6 @@ onReconnect mqtt io = do
     let mvar = reconnectHandler mqtt
     _ <- tryTakeMVar mvar
     putMVar mvar io
-
--- | Resubscribe to all topics. Returns the new list of granted 'QoS'.
-resubscribe :: MQTT -> IO [QoS]
-resubscribe mqtt = do
-    ths <- readMVar (topicHandlers mqtt)
-    mapM (\th -> sendSubscribe mqtt (thQoS th) (thTopic th)) ths
 
 -- | Close the handle and initiate a reconnect, if 'cReconnPeriod' is set.
 maybeReconnect :: MQTT -> IO Bool

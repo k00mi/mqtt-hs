@@ -22,7 +22,6 @@ module Network.MQTT.Monadic
   , disconnect
   , reconnect
   , onReconnect
-  , resubscribe
   -- * Connection settings
   , MQTTConfig
   , MQTT.defaultConfig
@@ -87,9 +86,6 @@ onReconnect :: (MonadBaseControl IO m, MonadMQTT r m) => m () -> m ()
 onReconnect action = do
     mqtt <- asks getMQTT
     liftBaseDiscard (MQTT.onReconnect mqtt) action
-
-resubscribe :: MonadMQTT r m => m [QoS]
-resubscribe = asks getMQTT >>= liftIO . MQTT.resubscribe
 
 subscribe :: (MonadBaseControl IO m, MonadMQTT r m)
           => QoS -> Topic -> (Topic -> ByteString -> m ()) -> m QoS
