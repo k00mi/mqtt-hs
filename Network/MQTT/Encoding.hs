@@ -110,7 +110,7 @@ putConnect Connect{..} = mconcat
 
 
 putConnAck :: MessageBody CONNACK -> Builder
-putConnAck = word8 . returnCode
+putConnAck ConnAck{..} = word8 0 {- reserved -} <> word8 returnCode
 
 
 putPublish :: MessageBody PUBLISH -> Builder

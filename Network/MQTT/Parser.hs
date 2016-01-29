@@ -157,7 +157,7 @@ connect = do
     parseIf flag parser = if flag then Just <$> parser else pure Nothing
 
 connAck :: MessageParser (MessageBody CONNACK)
-connAck = ConnAck <$> anyWord8'
+connAck = anyWord8' {- reserved -} *> (ConnAck <$> anyWord8')
 
 publish :: MqttHeader -> MessageParser (MessageBody PUBLISH)
 publish header = Publish
