@@ -31,8 +31,10 @@ message :: Parser SomeMessage
 message = do
     (msgType, header) <- mqttHeader
     remaining <- parseRemaining
-    withSomeSingI msgType $ \sMsgType ->
+    msg <- withSomeSingI msgType $ \sMsgType ->
       SomeMessage . Message header <$> mqttBody header sMsgType remaining
+    endOfInput
+    return msg
 
 
 ---------------------------------

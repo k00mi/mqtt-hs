@@ -64,7 +64,7 @@ import Control.Applicative (pure, (<$>), (<*>), (<$))
 import Control.Concurrent
 import Control.Exception hiding (handle)
 import Control.Monad hiding (sequence_)
-import Data.Attoparsec.ByteString (parseOnly)
+import Data.Attoparsec.ByteString (parseOnly, endOfInput)
 import Data.Bits ((.&.))
 import Data.ByteString (hGet, ByteString)
 import qualified Data.ByteString as BS
@@ -516,11 +516,12 @@ getMessage mqtt = do
     remaining <- getRemaining h 0
     rest <- hGet' h remaining
     let parseRslt = do
-          (mType, header) <- parseOnly mqttHeader headerByte
+          (mType, header) <- parseOnly (mqttHeader <* endOfInput) headerByte
           withSomeSingI mType $ \sMsgType ->
             parseOnly
               (SomeMessage . Message header
-                <$> mqttBody header sMsgType (fromIntegral remaining))
+                <$> mqttBody header sMsgType (fromIntegral remaining)
+                <* endOfInput)
               rest
     case parseRslt of
       Left err -> logError mqtt ("Error while parsing: " ++ err) >>
