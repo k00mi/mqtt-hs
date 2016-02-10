@@ -23,6 +23,7 @@ module Network.MQTT.Types
     Message(..)
   , SomeMessage(..)
   , MqttHeader(..)
+  , setDup
   -- * Message body
   , MessageBody(..)
   -- * Miscellaneous
@@ -98,6 +99,9 @@ data MqttHeader
                               -- future subscribers?
         }
     deriving (Eq, Ord, Show)
+
+setDup :: Message t -> Message t
+setDup (Message h b) = Message h { dup = True } b
 
 -- | The body of a MQTT message, indexed by the type of the message ('MsgType').
 data MessageBody (t :: MsgType) where

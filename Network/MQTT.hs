@@ -52,8 +52,6 @@ module Network.MQTT
   -- * Sending and receiving 'Message's
   , sendAwait
   , send
-  , doAwait
-  , doAwait'
   , addHandler
   , removeHandler
   -- * Reexports
@@ -69,7 +67,7 @@ import Data.Bits ((.&.))
 import Data.ByteString (hGet, ByteString)
 import qualified Data.ByteString as BS
 import Data.Foldable (for_, sequence_, traverse_)
-import Data.Maybe (isJust, fromJust)
+import Data.Maybe (isNothing, fromJust)
 import Data.Singletons (SingI(..))
 import Data.Singletons.Decide
 import Data.Text (Text)
@@ -144,6 +142,9 @@ data MQTTConfig
         -- 'Nothing' means no reconnects are attempted.
         , cLogger :: L.Logger
         -- ^ Functions for logging, see 'Network.MQTT.Logger.Logger'.
+        , cResendTimeout :: Int
+        -- ^ Time in microseconds after which messages that have not been but
+        -- should be acknowledged are retransmitted.
         }
 
 -- | Defaults for 'MQTTConfig', connects to a server running on
@@ -159,6 +160,7 @@ defaultConfig = MQTTConfig
     , cKeepAlive        = Nothing
     , cClientID         = "mqtt-haskell"
     , cConnectTimeout   = Nothing
+    , cResendTimeout    = 20 * 10^6 -- 20 seconds
     , cReconnPeriod     = Nothing
     , cLogger           = L.stdLogger
     }
@@ -238,40 +240,37 @@ sendConnect mqtt = send mqtt connect
                   (MqttText <$> cPassword conf)
                   (maybe 0 fromIntegral $ cKeepAlive conf))
 
--- | Execute an @IO@ action and immediately wait for a response, avoiding
--- race conditions.
+-- | Execute the common pattern of sending a message and awaiting
+-- a response in a safe, non-racy way. The message message is retransmitted
+-- if no response has been received after 'cResendTimeout' microseconds.
+-- Exponential backoff is used for further retransmissions
+-- An incoming message is considered a response if it is of the
+-- requested type and the 'MsgID's match (if present).
 --
 -- Note this expects a singleton to guarantee the returned 'Message' is of
 -- the 'MsgType' that is being waited for. Singleton constructors are the
 -- 'MsgType' constructors prefixed with a capital @S@, e.g. 'SPUBLISH'.
-doAwait :: SingI t
-        => MQTT -> IO () -> SMsgType t -> Maybe MsgID -> IO (Message t)
-doAwait mqtt io _ mMsgID = do
+sendAwait :: (SingI t, SingI r)
+          => MQTT -> Message t -> SMsgType r -> IO (Message r)
+sendAwait mqtt msg responseT = do
     var <- newEmptyMVar
+    let mMsgID = getMsgID (body msg)
     bracket
       (addHandler mqtt (putMVar var))
       (removeHandler mqtt)
-      (\handlerID ->
+      (\_ ->
         let wait = do
               msg <- readMVar var
-              if isJust mMsgID
-                then if mMsgID == getMsgID (body msg)
-                       then return msg
-                       else wait
-                else return msg
-        in io >> wait)
-
--- | A version of 'doAwait' that infers the type of the 'Message' that
--- is expected.
-doAwait' :: SingI t => MQTT -> IO () -> Maybe MsgID -> IO (Message t)
-doAwait' mqtt io mMsgID = doAwait mqtt io sing mMsgID
-
--- | Execute the common pattern of sending a message and awaiting
--- a response in a safe, non-racy way.
-sendAwait :: (SingI t, SingI r)
-          => MQTT -> Message t -> SMsgType r -> Maybe MsgID -> IO (Message r)
-sendAwait mqtt msg responseT mMsgID =
-    doAwait mqtt (send mqtt msg) responseT mMsgID
+              if isNothing mMsgID || mMsgID == getMsgID (body msg)
+                then return msg
+                else wait
+            keepTrying msg' to = do
+              send mqtt msg'
+              let retry = do
+                    logInfo mqtt "No response within timeout, retransmitting..."
+                    keepTrying (setDup msg') (to * 2)
+              timeout to wait >>= maybe retry return
+        in keepTrying msg (cResendTimeout $ config mqtt))
 
 -- | Register a callback that gets invoked whenever a 'Message' of the
 -- expected 'MsgType' is received. Returns the ID of the handler which can be
@@ -311,7 +310,7 @@ sendSubscribe mqtt qos topic = do
              (Message
                (Header False Confirm False)
                (Subscribe msgID [(topic, qos)]))
-             SSUBACK (Just msgID)
+             SSUBACK
     case granted $ body $ msg of
       [qosGranted] -> return qosGranted
       _ -> fail $ "Received invalid message as response to subscribe: "
@@ -323,7 +322,7 @@ unsubscribe mqtt topic = do
     msgID <- fromIntegral . hashUnique <$> newUnique
     _ <- sendAwait mqtt
            (Message (Header False Confirm False) (Unsubscribe msgID [topic]))
-           SUNSUBACK (Just msgID)
+           SUNSUBACK
     modifyMVar_ (topicHandlers mqtt) $ return . filter ((/= topic) . thTopic)
 
 -- | Publish a message to the given 'Topic' at the requested 'QoS' level.
@@ -341,13 +340,13 @@ publish mqtt qos retain topic body = do
     let pub = Message (Header False qos retain) (Publish topic msgID body)
     case qos of
       NoConfirm -> send mqtt pub
-      Confirm   -> void $ sendAwait mqtt pub SPUBACK msgID
+      Confirm   -> void $ sendAwait mqtt pub SPUBACK
       Handshake -> do
-        void $ sendAwait mqtt pub SPUBREC msgID
+        void $ sendAwait mqtt pub SPUBREC
         void $ sendAwait mqtt
                  (Message (Header False Confirm False)
                           (PubRel (fromJust msgID)))
-                 SPUBCOMP msgID
+                 SPUBCOMP
 
 -- | Close the connection to the server.
 disconnect :: MQTT -> IO ()
@@ -480,7 +479,7 @@ keepAliveLoop mqtt = do
       case rslt of
         Nothing -> void $ sendAwait mqtt
                      (Message (Header False NoConfirm False) PingReq)
-                     SPINGRESP Nothing
+                     SPINGRESP
         Just _ -> return ()
 
 -- | Forever executes the given @IO@ action. In the case of an 'IOException',
@@ -502,7 +501,7 @@ publishHandler mqtt (Message header body) = do
       (Handshake, Just msgid) -> do
           sendAwait mqtt
             (Message (Header False NoConfirm False) (PubRec msgid))
-            SPUBREL (Just msgid)
+            SPUBREL
           send mqtt $ Message (Header False NoConfirm False) (PubComp msgid)
       _ -> return ()
     callbacks <- filter (matches (topic body) . thTopic)
