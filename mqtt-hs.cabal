@@ -25,7 +25,7 @@ library
   exposed-modules:     Network.MQTT, Network.MQTT.Parser, Network.MQTT.Encoding,
                        Network.MQTT.Types, Network.MQTT.Logger,
                        Network.MQTT.Monadic
-  build-depends:       base >=4.7 && <4.9,
+  build-depends:       base >=4.6 && <4.9,
                        mtl >=1.1 && <2.3,
                        transformers >=0.2 && <0.5,
                        attoparsec >=0.10 && <0.14,

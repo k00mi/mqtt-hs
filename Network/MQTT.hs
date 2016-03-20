@@ -58,7 +58,7 @@ module Network.MQTT
   , module Network.MQTT.Types
   ) where
 
-import Control.Applicative (pure, (<$>), (<*>), (<$))
+import Control.Applicative (pure, (<$>), (<$), (<*>), (<*))
 import Control.Concurrent
 import Control.Exception hiding (handle)
 import Control.Monad hiding (sequence_)
@@ -351,8 +351,8 @@ publish mqtt qos retain topic body = do
 -- | Close the connection to the server.
 disconnect :: MQTT -> IO ()
 disconnect mqtt = mask_ $ do
-    tryReadMVar (recvThread mqtt) >>= traverse_ killThread
-    tryReadMVar (keepAliveThread mqtt) >>= traverse_ killThread
+    tryTakeMVar (recvThread mqtt) >>= traverse_ killThread
+    tryTakeMVar (keepAliveThread mqtt) >>= traverse_ killThread
     h <- takeMVar $ handle mqtt
     writeTo h (Message (Header False NoConfirm False) Disconnect)
       `catch` \e -> do
@@ -384,7 +384,7 @@ reconnect mqtt period = do
       go (mqtt { handle = handleVar })
       readMVar handleVar >>= putMVar (handle mqtt)
       -- forkIO so recvLoop isn't blocked
-      tryReadMVar (reconnectHandler mqtt) >>= traverse_ (void . forkIO)
+      tryTakeMVar (reconnectHandler mqtt) >>= traverse_ (void . forkIO)
       logInfo mqtt "Reconnect successfull"
   where
     -- try reconnecting until it works
