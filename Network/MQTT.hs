@@ -16,11 +16,12 @@ A simple example, assuming a broker is running on localhost
 
 >>> import Network.MQTT
 >>> import Network.MQTT.Logger
->>> Just mqtt <- connect defaultConfig { cLogger = warnings stdLogger }
->>> let f t payload = putStrLn $ "A message was published to " ++ show t ++ ": " ++ show payload
->>> subscribe mqtt NoConfirm "#" f
+>>> mqtt <- connect defaultConfig { cLogger = warnings stdLogger }
+>>> let f (t, payload) = "A message was published to " ++ show t ++ ": " ++ show payload
+>>> subscribe mqtt NoConfirm "#"
 NoConfirm
 >>> publish mqtt Handshake False "some random/topic" "Some content!"
+>>> f <$> atomically (readTChan (messages mqtt))
 A message was published to "some random/topic": "Some content!"
 -}
 module Network.MQTT
@@ -48,6 +49,7 @@ module Network.MQTT
   -- * Subscribing and publishing
   , subscribe
   , unsubscribe
+  , messages
   , publish
   -- * Sending and receiving 'Message's
   , sendAwait
@@ -60,6 +62,7 @@ module Network.MQTT
 
 import Control.Applicative (pure, (<$>), (<$), (<*>), (<*))
 import Control.Concurrent
+import Control.Concurrent.STM
 import Control.Exception hiding (handle)
 import Control.Monad hiding (sequence_)
 import Data.Attoparsec.ByteString (parseOnly, endOfInput)
@@ -96,17 +99,11 @@ data MQTT
         { config :: MQTTConfig
         , handle :: MVar Handle
         , handlers :: MVar [MessageHandler]
-        , topicHandlers :: MVar [TopicHandler]
+        , publishChan :: TChan (Topic, ByteString)
         , recvThread :: MVar ThreadId
         , reconnectHandler :: MVar (IO ())
         , keepAliveThread :: MVar ThreadId
         , sendSignal :: Maybe (MVar ()) -- Nothing if keep alive is 0
-        }
-
-data TopicHandler
-    = TopicHandler
-        { thTopic :: Topic
-        , thHandler :: Topic -> ByteString -> IO ()
         }
 
 data MessageHandler where
@@ -178,7 +175,7 @@ mkMQTT :: MQTTConfig -> Handle -> IO MQTT
 mkMQTT conf h = MQTT conf
                   <$> newMVar h
                   <*> newMVar []
-                  <*> newMVar []
+                  <*> newTChanIO
                   <*> newEmptyMVar
                   <*> newEmptyMVar
                   <*> newEmptyMVar
@@ -189,8 +186,8 @@ setup :: MQTT -> IO ()
 setup mqtt = do
     h <- readMVar (handle mqtt)
     hSetBinaryMode h True
-    handshake mqtt
     addHandler mqtt (publishHandler mqtt)
+    handshake mqtt
     forkIO (recvLoop mqtt) >>= putMVar (recvThread mqtt)
     for_ (keepAliveLoop mqtt) $ putMVar (keepAliveThread mqtt) <=< forkIO
 
@@ -287,24 +284,13 @@ removeHandler :: MQTT -> Unique -> IO ()
 removeHandler mqtt mhID = modifyMVar_ (handlers mqtt) $ \hs ->
     return $ filter (\(MessageHandler mhID' _) -> mhID' /= mhID) hs
 
--- | Subscribe to a 'Topic' with the given 'QoS' and invoke the callback
--- whenever something is published to the 'Topic'. Returns the 'QoS' that
--- was granted by the broker (lower or equal to the one requested).
+-- | Subscribe to a 'Topic' with the given 'QoS'. Returns the 'QoS' that was
+-- granted by the broker (lower or equal to the one requested).
 --
 -- The 'Topic' may contain
 -- <http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#appendix-a wildcars>.
--- The 'Topic' passed to the callback is the fully expanded version where
--- the message was actually published.
-subscribe :: MQTT -> QoS -> Topic -> (Topic -> ByteString -> IO ())
-          -> IO QoS
-subscribe mqtt qos topic handler = do
-    qosGranted <- sendSubscribe mqtt qos topic
-    modifyMVar_ (topicHandlers mqtt) $ \hs ->
-      return $ TopicHandler topic handler : hs
-    return qosGranted
-
-sendSubscribe :: MQTT -> QoS -> Topic -> IO QoS
-sendSubscribe mqtt qos topic = do
+subscribe :: MQTT -> QoS -> Topic -> IO QoS
+subscribe mqtt qos topic = do
     msgID <- fromIntegral . hashUnique <$> newUnique
     msg <- sendAwait mqtt
              (Message
@@ -320,10 +306,13 @@ sendSubscribe mqtt qos topic = do
 unsubscribe :: MQTT -> Topic -> IO ()
 unsubscribe mqtt topic = do
     msgID <- fromIntegral . hashUnique <$> newUnique
-    _ <- sendAwait mqtt
+    void $ sendAwait mqtt
            (Message (Header False Confirm False) (Unsubscribe msgID [topic]))
            SUNSUBACK
-    modifyMVar_ (topicHandlers mqtt) $ return . filter ((/= topic) . thTopic)
+
+-- | Returns the TChan to which all received messages are written.
+messages :: MQTT -> TChan (Topic, ByteString)
+messages = publishChan
 
 -- | Publish a message to the given 'Topic' at the requested 'QoS' level.
 -- The payload can be any sequence of bytes, including none at all. The 'Bool'
@@ -504,9 +493,7 @@ publishHandler mqtt (Message header body) = do
             SPUBREL
           send mqtt $ Message (Header False NoConfirm False) (PubComp msgid)
       _ -> return ()
-    callbacks <- filter (matches (topic body) . thTopic)
-                   <$> readMVar (topicHandlers mqtt)
-    for_ callbacks $ \th -> thHandler th (topic body) (payload body)
+    atomically $ writeTChan (publishChan mqtt) (topic body, payload body)
 
 getMessage :: MQTT -> IO SomeMessage
 getMessage mqtt = do

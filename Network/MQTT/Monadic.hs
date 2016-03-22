@@ -85,12 +85,10 @@ onReconnect action = do
     mqtt <- asks getMQTT
     liftBaseDiscard (MQTT.onReconnect mqtt) action
 
-subscribe :: (MonadBaseControl IO m, MonadMQTT r m)
-          => QoS -> Topic -> (Topic -> ByteString -> m ()) -> m QoS
-subscribe qos topic callback = do
+subscribe :: MonadMQTT r m => QoS -> Topic -> m QoS
+subscribe qos topic = do
     mqtt <- asks getMQTT
-    liftBaseWith $ \runInBase ->
-      MQTT.subscribe mqtt qos topic (\t bs -> void $ runInBase $ callback t bs)
+    liftIO $ MQTT.subscribe mqtt qos topic
 
 unsubscribe :: MonadMQTT r m => Topic -> m ()
 unsubscribe topic = asks getMQTT >>= liftIO . flip MQTT.unsubscribe topic
