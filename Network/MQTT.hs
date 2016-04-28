@@ -245,7 +245,7 @@ unregisterVar mqtt var = writeCmd mqtt . CmdStopWaiting . AwaitMessage var
 -- 'MsgType' constructors prefixed with a capital @S@, e.g. 'SPUBLISH'.
 sendAwait :: (SingI t, SingI r)
           => MQTT -> Message t -> SMsgType r -> IO (Message r)
-sendAwait mqtt msg responseT = do
+sendAwait mqtt msg _responseS = do
     var <- newEmptyMVar
     let mMsgID = getMsgID (body msg)
     bracketOnError
@@ -257,12 +257,12 @@ sendAwait mqtt msg responseT = do
               if isNothing mMsgID || mMsgID == getMsgID (body msg)
                 then return msg
                 else wait
-            keepTrying msg' to = do
-              send mqtt msg'
+            keepTrying msg' tout = do
+              send mqtt msg
               let retry = do
                     logInfo mqtt "No response within timeout, retransmitting..."
-                    keepTrying (setDup msg') (to * 2)
-              timeout to wait >>= maybe retry return
+                    keepTrying (setDup msg') (tout * 2)
+              timeout tout wait >>= maybe retry return
         in keepTrying msg (cResendTimeout $ config mqtt))
 
 -- | Subscribe to a 'Topic' with the given 'QoS'. Returns the 'QoS' that was
