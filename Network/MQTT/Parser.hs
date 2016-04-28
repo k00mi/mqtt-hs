@@ -75,9 +75,10 @@ parseRemaining = do
     when (BS.length bytes > 3) $
       fail "'Remaining length' field must not be longer than 4 bytes"
     stopByte <- anyWord8
-    return $ snd $ BS.foldr' f (128, fromIntegral stopByte) bytes
+    let (factor, acc) = BS.foldl' f (1, 0) bytes
+    return $ acc + factor * fromIntegral stopByte
   where
-    f byte (factor, acc) =
+    f (factor, acc) byte =
       (factor*128, acc + factor * fromIntegral (0x7f .&. byte))
 
 
