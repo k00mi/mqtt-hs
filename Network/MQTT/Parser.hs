@@ -17,7 +17,8 @@ import Data.Attoparsec.ByteString
 import Data.Bits
 import qualified Data.ByteString as BS
 import Data.Singletons (SingI)
-import Data.Text.Encoding (decodeUtf8')
+import Data.Text.Encoding (decodeUtf8With)
+import Data.Text.Encoding.Error (lenientDecode)
 import Data.Word
 import Prelude hiding (takeWhile, take)
 
@@ -195,12 +196,7 @@ getTopic = toTopic <$> mqttText
 
 -- | Parse a length-prefixed UTF-8 string.
 mqttText :: MessageParser MqttText
-mqttText = do
-    n <- anyWord16BE
-    rslt <- decodeUtf8' <$> take' n
-    case rslt of
-      Left err -> fail $ "Invalid UTF-8: " ++ show err
-      Right txt -> return $ MqttText txt
+mqttText = MqttText . decodeUtf8With lenientDecode <$> (anyWord16BE >>= take')
 
 -- | Synonym for 'anyWord16BE'.
 parseMsgID :: MessageParser Word16
