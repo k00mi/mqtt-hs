@@ -21,16 +21,14 @@ A simple example, assuming a broker is running on localhost
 >>> subscribe mqtt NoConfirm "#"
 NoConfirm
 >>> publish mqtt Handshake False "some random/topic" "Some content!"
->>> f <$> atomically (readTChan (messages mqtt))
+>>> f <$> atomically (readTChan (events mqtt))
 A message was published to "some random/topic": "Some content!"
 -}
 module Network.MQTT
   ( -- * Creating connections
-    connect
-  , MQTT
+    MQTT
+  , connect
   , disconnect
-  , reconnect
-  , onReconnect
   -- * Connection settings
   , MQTTConfig
   , defaultConfig
@@ -49,44 +47,39 @@ module Network.MQTT
   -- * Subscribing and publishing
   , subscribe
   , unsubscribe
-  , messages
+  , events
+  , Event(..)
+  , Terminated(..)
   , publish
-  -- * Sending and receiving 'Message's
-  , sendAwait
-  , send
-  , addHandler
-  , removeHandler
   -- * Reexports
   , module Network.MQTT.Types
   ) where
 
-import Control.Applicative (pure, (<$>), (<$), (<*>), (<*))
+import Control.Applicative ((<$>), (<$), (<*>))
 import Control.Concurrent
+import qualified Control.Concurrent.Async as Async
 import Control.Concurrent.STM
-import Control.Exception hiding (handle)
-import Control.Monad hiding (sequence_)
-import Data.Attoparsec.ByteString (parseOnly, endOfInput)
-import Data.Bits ((.&.))
-import Data.ByteString (hGet, ByteString)
+import Control.Exception (catch, bracketOnError, IOException, throw)
+import Control.Monad (void, when, forever, filterM)
+import Control.Monad.IO.Class (liftIO, MonadIO)
+import Control.Monad.State.Strict (evalStateT, gets, modify, StateT)
+import Data.Attoparsec.ByteString (IResult(..) , parse)
+import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
-import Data.Foldable (for_, sequence_, traverse_)
+import Data.Foldable (for_)
 import Data.Maybe (isNothing, fromJust)
 import Data.Singletons (SingI(..))
 import Data.Singletons.Decide
 import Data.Text (Text)
 import Data.Traversable (for)
-import Data.Typeable (Typeable)
 import Data.Unique
-import Data.Word
 import Network
-import Prelude hiding (sequence_)
-import System.IO (Handle, hClose, hIsEOF, hSetBinaryMode)
-import System.IO.Error (ioError, mkIOError, eofErrorType, annotateIOError)
+import System.IO (Handle, hSetBinaryMode, hLookAhead)
 import System.Timeout (timeout)
 
 import Network.MQTT.Types
-import Network.MQTT.Parser (mqttBody, mqttHeader)
-import Network.MQTT.Encoding
+import Network.MQTT.Parser (message)
+import Network.MQTT.Encoding (writeTo)
 import qualified Network.MQTT.Logger as L
 
 -----------------------------------------
@@ -97,18 +90,42 @@ import qualified Network.MQTT.Logger as L
 data MQTT
     = MQTT
         { config :: MQTTConfig
-        , handle :: MVar Handle
-        , handlers :: MVar [MessageHandler]
-        , publishChan :: TChan (Topic, ByteString)
-        , recvThread :: MVar ThreadId
-        , reconnectHandler :: MVar (IO ())
-        , keepAliveThread :: MVar ThreadId
+        , events :: TChan Event
+        , commands :: TChan Command
         , sendSignal :: Maybe (MVar ()) -- Nothing if keep alive is 0
+        , mqttAsync :: MVar (Async.Async ())
         }
 
-data MessageHandler where
-    MessageHandler :: SingI t
-                   => Unique -> (Message t -> IO ()) -> MessageHandler
+-- | Events for you, my dear user.
+data Event
+    = Published (Message PUBLISH)
+    | Terminated Terminated
+    -- ^ The connection has been terminated.
+    -- No new messages will be written to the channel.
+
+-- | Reasons for why the connection was terminated.
+data Terminated
+    = ParseFailed [String] String
+    -- ^ at the context in @['String']@ with the given message.
+    | IOErr IOException
+    | UserRequested
+    deriving Show
+
+-- | Commands from the user for the library.
+data Command
+    = CmdDisconnect
+    | CmdSend SomeMessage
+    | CmdAwait AwaitMessage
+    | CmdStopWaiting AwaitMessage
+
+data AwaitMessage where
+    AwaitMessage :: SingI t => MVar (Message t) -> Maybe MsgID -> AwaitMessage
+
+instance Eq AwaitMessage where
+  AwaitMessage (var :: MVar (Message t)) mMsgID == AwaitMessage (var' :: MVar (Message t')) mMsgID' =
+    case (sing :: SMsgType t) %~ (sing :: SMsgType t') of
+      Proved Refl -> mMsgID == mMsgID' && var == var'
+      Disproved _ -> False
 
 -- | The various options when establishing a connection.
 data MQTTConfig
@@ -167,64 +184,28 @@ defaultConfig = MQTTConfig
 connect :: MQTTConfig -> IO MQTT
 connect conf = do
     h <- connectTo (cHost conf) (PortNumber $ cPort conf)
-    mqtt <- mkMQTT conf h
-    (mqtt <$ setup mqtt) `onException` disconnect mqtt
-
--- | Create an uninitialized 'MQTT'.
-mkMQTT :: MQTTConfig -> Handle -> IO MQTT
-mkMQTT conf h = MQTT conf
-                  <$> newMVar h
-                  <*> newMVar []
-                  <*> newTChanIO
-                  <*> newEmptyMVar
-                  <*> newEmptyMVar
-                  <*> newEmptyMVar
-                  <*> for (cKeepAlive conf) (const newEmptyMVar)
-
--- | Handshake with the broker and start threads.
-setup :: MQTT -> IO ()
-setup mqtt = do
-    h <- readMVar (handle mqtt)
     hSetBinaryMode h True
-    addHandler mqtt (publishHandler mqtt)
-    handshake mqtt
-    forkIO (recvLoop mqtt) >>= putMVar (recvThread mqtt)
-    for_ (keepAliveLoop mqtt) $ putMVar (keepAliveThread mqtt) <=< forkIO
+    mqtt <- mkMQTT conf h -- `onException` disconnect mqtt
+    mqtt <$ handshake mqtt
 
--- | Send a 'Message' to the server.
---
--- In the case of an 'IOException', a reconnect is initiated and the 'Message'
--- sent again if 'cReconnPeriod' is set; otherwise the exception is rethrown.
-send :: SingI t => MQTT -> Message t -> IO ()
-send mqtt msg = do
-    logDebug mqtt $ "Sending " ++ show (toMsgType msg)
-    h <- readMVar (handle mqtt)
-    writeTo h msg
-    for_ (sendSignal mqtt) $ flip tryPutMVar ()
-  `catch`
-    \e -> do
-      logError mqtt $ "send: Caught " ++ show (e :: IOException)
-      didReconnect <- maybeReconnect mqtt
-      if didReconnect
-         then send mqtt msg
-         else throw e
+-- | Start all the threads.
+mkMQTT :: MQTTConfig -> Handle -> IO MQTT
+mkMQTT conf h = do
+    mqtt <- MQTT conf
+              <$> newTChanIO
+              <*> newTChanIO
+              <*> for (cKeepAlive conf) (const newEmptyMVar)
+              <*> newEmptyMVar
+    Async.async (mainLoop mqtt h) >>= putMVar (mqttAsync mqtt)
+    return mqtt
+
+disconnect :: MQTT -> IO ()
+disconnect mqtt = writeCmd mqtt CmdDisconnect
 
 handshake :: MQTT -> IO ()
 handshake mqtt = do
-    let timeout' = case cConnectTimeout (config mqtt) of
-                     Nothing -> fmap Just
-                     Just t -> timeout (t * 1000000)
-    sendConnect mqtt
-    mMsg <- timeout' (getMessage mqtt)
-              `catch` \(_ :: MQTTException) -> throw InvalidResponse
-    case mMsg of
-      Just (SomeMessage (Message _ (ConnAck code))) ->
-        when (code /= 0) $ throw (toConnectError code)
-      Just _ -> throw InvalidResponse
-      Nothing -> throw Timeout
-
-sendConnect :: MQTT -> IO ()
-sendConnect mqtt = send mqtt connect
+    Message _ (ConnAck retCode) <- sendAwait mqtt connect SCONNACK
+    when (retCode /= 0) $ throw (toConnectError retCode)
   where
     conf = config mqtt
     connect = Message
@@ -236,6 +217,21 @@ sendConnect mqtt = send mqtt connect
                   (MqttText <$> cUsername conf)
                   (MqttText <$> cPassword conf)
                   (maybe 0 fromIntegral $ cKeepAlive conf))
+
+-- | Tell the `MQTT` instance to send the given `Message`.
+-- Any errors that may happen while sending will come up as an `Event` on the
+-- `events` channel.
+send :: SingI t => MQTT -> Message t -> IO ()
+send mqtt = writeCmd mqtt . CmdSend . SomeMessage
+
+-- | Tell the `MQTT` instance to place the next `Message` of correct
+-- `MsgType` and `MsgID` (if present) into the `MVar`.
+registerVar :: SingI t => MQTT -> MVar (Message t) -> Maybe MsgID -> IO ()
+registerVar mqtt var = writeCmd mqtt . CmdAwait . AwaitMessage var
+
+-- | Stop waiting for the described `Message`.
+unregisterVar :: SingI t => MQTT -> MVar (Message t) -> Maybe MsgID -> IO ()
+unregisterVar mqtt var = writeCmd mqtt . CmdStopWaiting . AwaitMessage var
 
 -- | Execute the common pattern of sending a message and awaiting
 -- a response in a safe, non-racy way. The message message is retransmitted
@@ -252,9 +248,9 @@ sendAwait :: (SingI t, SingI r)
 sendAwait mqtt msg responseT = do
     var <- newEmptyMVar
     let mMsgID = getMsgID (body msg)
-    bracket
-      (addHandler mqtt (putMVar var))
-      (removeHandler mqtt)
+    bracketOnError
+      (registerVar mqtt var mMsgID)
+      (\_ -> unregisterVar mqtt var mMsgID)
       (\_ ->
         let wait = do
               msg <- readMVar var
@@ -268,21 +264,6 @@ sendAwait mqtt msg responseT = do
                     keepTrying (setDup msg') (to * 2)
               timeout to wait >>= maybe retry return
         in keepTrying msg (cResendTimeout $ config mqtt))
-
--- | Register a callback that gets invoked whenever a 'Message' of the
--- expected 'MsgType' is received. Returns the ID of the handler which can be
--- passed to 'removeHandler'.
-addHandler :: SingI t => MQTT -> (Message t -> IO ()) -> IO Unique
-addHandler mqtt handler = do
-    mhID <- newUnique
-    modifyMVar_ (handlers mqtt) $ \hs ->
-      return $ MessageHandler mhID handler : hs
-    return mhID
-
--- | Remove the handler with the given ID.
-removeHandler :: MQTT -> Unique -> IO ()
-removeHandler mqtt mhID = modifyMVar_ (handlers mqtt) $ \hs ->
-    return $ filter (\(MessageHandler mhID' _) -> mhID' /= mhID) hs
 
 -- | Subscribe to a 'Topic' with the given 'QoS'. Returns the 'QoS' that was
 -- granted by the broker (lower or equal to the one requested).
@@ -302,17 +283,13 @@ subscribe mqtt qos topic = do
       _ -> fail $ "Received invalid message as response to subscribe: "
                     ++ show (toMsgType msg)
 
--- | Unsubscribe from the given 'Topic' and remove any handlers.
+-- | Unsubscribe from the given 'Topic'.
 unsubscribe :: MQTT -> Topic -> IO ()
 unsubscribe mqtt topic = do
     msgID <- fromIntegral . hashUnique <$> newUnique
     void $ sendAwait mqtt
            (Message (Header False Confirm False) (Unsubscribe msgID [topic]))
            SUNSUBACK
-
--- | Returns the TChan to which all received messages are written.
-messages :: MQTT -> TChan (Topic, ByteString)
-messages = publishChan
 
 -- | Publish a message to the given 'Topic' at the requested 'QoS' level.
 -- The payload can be any sequence of bytes, including none at all. The 'Bool'
@@ -337,209 +314,175 @@ publish mqtt qos retain topic body = do
                           (PubRel (fromJust msgID)))
                  SPUBCOMP
 
--- | Close the connection to the server.
-disconnect :: MQTT -> IO ()
-disconnect mqtt = mask_ $ do
-    tryTakeMVar (recvThread mqtt) >>= traverse_ killThread
-    tryTakeMVar (keepAliveThread mqtt) >>= traverse_ killThread
-    h <- takeMVar $ handle mqtt
-    writeTo h (Message (Header False NoConfirm False) Disconnect)
-      `catch` \e -> do
-        logWarning mqtt $ show $
-          annotateIOError e "disconnect/writeTo" (Just h) Nothing
-        logWarning mqtt "Continuing disconnect."
-    hClose h
-      `catch` \e -> do
-        logWarning mqtt $ show $
-          annotateIOError e "disconnect/hClose" (Just h) Nothing
-        logWarning mqtt "Continuing disconnect."
-    logInfo mqtt "Disconnected."
-
--- | Try creating a new connection with the same config (retrying after the
--- specified amount of seconds has passed) and invoke the callback that is
--- set with 'onReconnect' once a new connection has been established.
---
--- Does not terminate the old connection.
-reconnect :: MQTT -> Int -> IO ()
-reconnect mqtt period = do
-    -- Other threads can't write while the MVar is empty
-    mh <- tryTakeMVar (handle mqtt)
-    -- If it was empty, someone else is already reconnecting
-    for_ mh $ \_ -> do
-      logInfo mqtt "Reconnecting..."
-      -- Temporarily create a new MVar for the handshake so other threads
-      -- don't write before the connection is fully established
-      handleVar <- newEmptyMVar
-      go (mqtt { handle = handleVar })
-      readMVar handleVar >>= putMVar (handle mqtt)
-      -- forkIO so recvLoop isn't blocked
-      tryTakeMVar (reconnectHandler mqtt) >>= traverse_ (void . forkIO)
-      logInfo mqtt "Reconnect successfull"
-  where
-    -- try reconnecting until it works
-    go mqtt' = do
-        let conf = config mqtt
-        connectTo (cHost conf) (PortNumber $ cPort conf)
-          >>= putMVar (handle mqtt')
-        handshake mqtt'
-      `catches`
-        let logAndRetry :: Exception e => e -> IO ()
-            logAndRetry e = do
-              mh <- tryTakeMVar (handle mqtt')
-              for mh $ \h -> hClose h `catch` \(e :: IOException) -> return ()
-              logWarning mqtt $ "reconnect: " ++ show e
-              threadDelay (period * 10^6)
-              go mqtt'
-        in [ Handler $ \e -> logAndRetry (e :: IOException)
-           , Handler $ \e -> logAndRetry (e :: ConnectError)
-           ]
-
--- | Register a callback that will be invoked when a reconnect has
--- happened.
-onReconnect :: MQTT -> IO () -> IO ()
-onReconnect mqtt io = do
-    let mvar = reconnectHandler mqtt
-    _ <- tryTakeMVar mvar
-    putMVar mvar io
-
--- | Close the handle and initiate a reconnect, if 'cReconnPeriod' is set.
-maybeReconnect :: MQTT -> IO Bool
-maybeReconnect mqtt = do
-    catch
-      (readMVar (handle mqtt) >>= hClose)
-      (const (pure ()) :: IOException -> IO ())
-    maybe (return False) (fmap  (const True) . reconnect mqtt) $
-      cReconnPeriod (config mqtt)
-
 
 -----------------------------------------
 -- Logger utility functions
 -----------------------------------------
 
-logDebug :: MQTT -> String -> IO ()
-logDebug mqtt = L.logDebug (cLogger (config mqtt))
+logDebug :: MonadIO io => MQTT -> String -> io ()
+logDebug mqtt = liftIO . L.logDebug (cLogger (config mqtt))
 
-logInfo :: MQTT -> String -> IO ()
-logInfo mqtt = L.logInfo (cLogger (config mqtt))
+logInfo :: MonadIO io => MQTT -> String -> io ()
+logInfo mqtt = liftIO . L.logInfo (cLogger (config mqtt))
 
-logWarning :: MQTT -> String -> IO ()
-logWarning mqtt = L.logWarning (cLogger (config mqtt))
+logWarning :: MonadIO io => MQTT -> String -> io ()
+logWarning mqtt = liftIO . L.logWarning (cLogger (config mqtt))
 
-logError :: MQTT -> String -> IO ()
-logError mqtt = L.logError (cLogger (config mqtt))
+logError :: MonadIO io => MQTT -> String -> io ()
+logError mqtt = liftIO . L.logError (cLogger (config mqtt))
 
 
 -----------------------------------------
 -- Internal
 -----------------------------------------
 
-recvLoop :: MQTT -> IO ()
-recvLoop m = loopWithReconnect m "recvLoop" $ \mqtt -> do
-    h <- readMVar (handle mqtt)
-    eof <- hIsEOF h
-    if eof
-      then ioError $ mkIOError eofErrorType "" (Just h) Nothing
-      else getMessage mqtt >>= dispatchMessage mqtt
+type ParseCC = ByteString -> IResult ByteString SomeMessage
+
+-- | Internal state for the main loop
+data MqttState
+  = MqttState
+    { msParseCC :: ParseCC -- ^ Current parser continuation
+    , msUnconsumed :: BS.ByteString -- ^ Not yet parsed input
+    , msWaiting :: [AwaitMessage] -- ^ Messages we're waiting for
+    }
+
+-- | Input for the main loop
+data Input
+    = InMsg SomeMessage
+    | InErr Terminated
+    | InCmd Command
+
+inputBufferSize :: Int
+inputBufferSize = 4048
+
+mainLoop :: MQTT -> Handle -> IO ()
+mainLoop mqtt h = do
+    for_ (sendSignal mqtt) $ forkMQTT mqtt . keepAliveLoop mqtt
+    evalStateT go (MqttState (parse message) BS.empty [])
   `catch`
-    \e -> logWarning mqtt $ "recvLoop: Caught " ++ show (e :: MQTTException)
-
-dispatchMessage :: MQTT -> SomeMessage -> IO ()
-dispatchMessage mqtt (SomeMessage msg) =
-    readMVar (handlers mqtt) >>= mapM_ applyMsg
+    \e -> terminate $ IOErr e
   where
-    applyMsg :: MessageHandler -> IO ()
-    applyMsg (MessageHandler _ (handler :: Message t' -> IO ())) =
-      case toSMsgType msg %~ (sing :: SMsgType t') of
-        Proved Refl -> void $ forkIO $ handler msg
-        Disproved _ -> return ()
+    go = do
+      input <- waitForInput mqtt h
+      case input of
+        InErr err -> liftIO $
+          terminate err
+        InMsg someMsg -> do
+          logDebug mqtt $ "Received " ++ show (toMsgType' someMsg)
+          handleMessage mqtt someMsg
+          go
+        InCmd cmd -> case cmd of
+          CmdDisconnect -> liftIO $ do
+            doSend msgDisconnect
+            terminate UserRequested
+          CmdSend (SomeMessage msg) -> do
+            doSend msg
+            go
+          CmdAwait awaitMsg -> do
+            modify $ \s -> s { msWaiting = awaitMsg : msWaiting s }
+            go
+          CmdStopWaiting awaitMsg -> do
+            modify $ \s -> s { msWaiting = filter (== awaitMsg) $ msWaiting s }
+            go
 
--- | Returns 'Nothing' if no Keep Alive is specified.
--- Otherwise returns a loop that blocks on an @MVar ()@ that is written to by
--- 'send'. If the Keep Alive period runs out while waiting, send a 'PINGREQ'
--- to the server and wait for PINGRESP.
-keepAliveLoop :: MQTT -> Maybe (IO ())
-keepAliveLoop mqtt = do
-    period <- cKeepAlive (config mqtt)
-    sig <- sendSignal mqtt
-    return $ loopWithReconnect mqtt "keepAliveLoop" (loopBody period sig)
+    terminate = writeEvent mqtt . Terminated
+    msgDisconnect = Message (Header False NoConfirm False) Disconnect
+
+    doSend :: (MonadIO io, SingI t) => Message t -> io ()
+    doSend msg = liftIO $ do
+        logDebug mqtt $ "Sending " ++ show (toMsgType msg)
+        writeTo h msg
+        for_ (sendSignal mqtt) $ flip tryPutMVar ()
+
+waitForInput :: MQTT -> Handle -> StateT MqttState IO Input
+waitForInput mqtt h = do
+    let cmdChan = commands mqtt
+    unconsumed <- gets msUnconsumed
+    if BS.null unconsumed
+      then do
+        -- wait until input is available, but don't retrieve it yet to avoid
+        -- loosing anything
+        input <- liftIO $ Async.race
+                  (void $ hLookAhead h)
+                  (void $ atomically $ peekTChan cmdChan)
+        -- now we have committed to one source and can actually read it
+        case input of
+          Left () -> liftIO (BS.hGetSome h inputBufferSize) >>= returnIfDone
+          Right () -> InCmd <$> liftIO (atomically (readTChan cmdChan))
+      else
+        returnIfDone unconsumed
   where
-    loopBody period mvar mqtt = do
-      rslt <- timeout (period * 1000000) $ takeMVar mvar
-      case rslt of
-        Nothing -> void $ sendAwait mqtt
-                     (Message (Header False NoConfirm False) PingReq)
-                     SPINGRESP
-        Just _ -> return ()
+    returnIfDone bytes = parseBytes bytes >>= maybe (waitForInput mqtt h) return
 
--- | Forever executes the given @IO@ action. In the case of an 'IOException',
--- a reconnect is initiated if 'cReconnPeriod' is set, otherwise the action
--- terminates.
-loopWithReconnect :: MQTT -> String -> (MQTT -> IO ()) -> IO ()
-loopWithReconnect mqtt desc act = catch (forever $ act mqtt) $ \e -> do
-  logError mqtt $ show $ annotateIOError e desc Nothing Nothing
-  didReconnect <- maybeReconnect mqtt
-  if didReconnect
-    then loopWithReconnect mqtt desc act
-    else logError mqtt $ desc ++ ": No reconnect, terminating."
+-- | Parse the given 'ByteString', returning 'Nothing' if more input is needed.
+parseBytes :: Monad m => ByteString -> StateT MqttState m (Maybe Input)
+parseBytes bytes = do
+    parseCC <- gets msParseCC
+    case parseCC bytes of
+        Fail _unconsumed context err ->
+          return $ Just $ InErr $ ParseFailed context err
+        Partial cont -> do
+          modify $ \s -> s { msParseCC = cont
+                           , msUnconsumed = BS.empty }
+          return Nothing
+        Done unconsumed someMsg -> do
+          modify $ \s -> s { msParseCC = parse message
+                           , msUnconsumed = unconsumed }
+          return $ Just $ InMsg someMsg
+
+handleMessage :: MQTT -> SomeMessage -> StateT MqttState IO ()
+handleMessage mqtt (SomeMessage msg) =
+    case toSMsgType msg %~ SPUBLISH of
+      Proved Refl -> liftIO $ void $ forkMQTT mqtt $ publishHandler mqtt msg
+      Disproved _ -> do
+        waiting' <- gets msWaiting >>= liftIO . filterM passOnMatching
+        modify (\s -> s { msWaiting = waiting' })
+  where
+    passOnMatching :: AwaitMessage -> IO Bool
+    passOnMatching (AwaitMessage (var :: MVar (Message t')) mMsgID')
+      | isNothing mMsgID || mMsgID == mMsgID' =
+        case toSMsgType msg %~ (sing :: SMsgType t') of
+          Proved Refl -> putMVar var msg >> return False
+          Disproved _ -> return True
+      | otherwise = return True
+
+    mMsgID = getMsgID (body msg)
+
+keepAliveLoop :: MQTT -> MVar () -> IO ()
+keepAliveLoop mqtt signal = forever $ do
+    let tout = fromJust $ cKeepAlive $ config mqtt
+    rslt <- timeout (tout * 10^6) (takeMVar signal)
+    case rslt of
+      Nothing -> void $ sendAwait mqtt
+                  (Message (Header False NoConfirm False) PingReq)
+                  SPINGRESP
+      Just _ -> return ()
 
 publishHandler :: MQTT -> Message PUBLISH -> IO ()
-publishHandler mqtt (Message header body) = do
-    case (qos header, pubMsgID body) of
-      (Confirm, Just msgid) ->
+publishHandler mqtt msg = do
+    case (qos (header msg), pubMsgID (body msg)) of
+      (Confirm, Just msgid) -> do
+          release
           send mqtt $ Message (Header False NoConfirm False) (PubAck msgid)
       (Handshake, Just msgid) -> do
-          sendAwait mqtt
-            (Message (Header False NoConfirm False) (PubRec msgid))
-            SPUBREL
+          _ <- sendAwait mqtt
+                (Message (Header False NoConfirm False) (PubRec msgid))
+                SPUBREL
+          release
           send mqtt $ Message (Header False NoConfirm False) (PubComp msgid)
-      _ -> return ()
-    atomically $ writeTChan (publishChan mqtt) (topic body, payload body)
-
-getMessage :: MQTT -> IO SomeMessage
-getMessage mqtt = do
-    h <- readMVar (handle mqtt)
-    headerByte <- hGet' h 1
-    remaining <- getRemaining h 0
-    rest <- hGet' h remaining
-    let parseRslt = do
-          (mType, header) <- parseOnly (mqttHeader <* endOfInput) headerByte
-          withSomeSingI mType $ \sMsgType ->
-            parseOnly
-              (SomeMessage . Message header
-                <$> mqttBody header sMsgType (fromIntegral remaining)
-                <* endOfInput)
-              rest
-    case parseRslt of
-      Left err -> logError mqtt ("Error while parsing: " ++ err) >>
-                  throw (ParseError err)
-      Right msg -> msg <$
-        logDebug mqtt ("Received " ++ show (toMsgType' msg))
-
-getRemaining :: Handle -> Int -> IO Int
-getRemaining h n = go n 1
+      _ -> release
   where
-    go acc fac = do
-      b <- getByte h
-      let acc' = acc + (b .&. 127) * fac
-      if b .&. 128 == 0
-        then return acc'
-        else go acc' (fac * 128)
+    release = writeEvent mqtt $ Published msg
 
-getByte :: Handle -> IO Int
-getByte h = fromIntegral . BS.head <$> hGet' h 1
 
-hGet' :: Handle -> Int -> IO BS.ByteString
-hGet' h n = do
-    bs <- hGet h n
-    if BS.length bs < n
-      then throw EOF
-      else return bs
+-- | Runs the `IO` action in a seperate thread and cancels it if the main MQTT
+-- loop exits earlier.
+forkMQTT :: MQTT -> IO () -> IO (Async.Async ())
+forkMQTT mqtt action = Async.async $ Async.withAsync action $ \_forked ->
+    readMVar (mqttAsync mqtt) >>= Async.wait
 
--- | Exceptions that may arise while parsing messages. A user should
--- never see one of these.
-data MQTTException
-    = EOF
-    | ParseError String
-    deriving (Show, Typeable)
+writeCmd :: MQTT -> Command -> IO ()
+writeCmd mqtt = atomically . writeTChan (commands mqtt)
 
-instance Exception MQTTException where
+writeEvent :: MQTT -> Event -> IO ()
+writeEvent mqtt = atomically . writeTChan (events mqtt)
