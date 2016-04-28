@@ -43,7 +43,7 @@ message = do
 
 -- | Parser for the fixed header part of a MQTT message.
 mqttHeader :: Parser (MsgType, MqttHeader)
-mqttHeader = do
+mqttHeader = ctxt "mqttHeader" $ do
     byte1 <- anyWord8
     qos <- toQoS $ 3 .&. shiftR byte1 1
     let retain = testBit byte1 0
@@ -70,7 +70,7 @@ mqttHeader = do
 -- | Parse the 'remaining length' field that indicates how long the rest of
 -- the message is.
 parseRemaining :: Parser Word32
-parseRemaining = do
+parseRemaining = ctxt "parseRemaining" $ do
     bytes <- takeWhile (> 0x7f) -- bytes with first bit set
     when (BS.length bytes > 3) $
       fail "'Remaining length' field must not be longer than 4 bytes"
@@ -90,7 +90,7 @@ parseRemaining = do
 -- @msgtype@ that is @remaining@ bytes long.
 mqttBody :: SingI t
          => MqttHeader -> SMsgType t -> Word32 -> Parser (MessageBody t)
-mqttBody header msgType remaining =
+mqttBody header msgType remaining = ctxt "mqttBody" $
     let parser =
           case msgType of
             SCONNECT     -> connect
@@ -110,7 +110,7 @@ mqttBody header msgType remaining =
     in evalStateT parser remaining
 
 connect :: MessageParser (MessageBody CONNECT)
-connect = do
+connect = ctxt' "connect" $ do
     protocol
     version
 
@@ -127,26 +127,26 @@ connect = do
     mWill <- parseIf willFlag $
                Will (testBit flags 5)
                   <$> toQoS (3 .&. shiftR flags 3)
-                  <*> fmap toTopic mqttText
-                  <*> mqttText
+                  <*> (ctxt' "Will Topic" $ fmap toTopic mqttText)
+                  <*> (ctxt' "Will Message" mqttText)
 
-    username <- parseIf usernameFlag mqttText
+    username <- ctxt' "Username" $ parseIf usernameFlag mqttText
 
-    password <- parseIf passwordFlag mqttText
+    password <- ctxt' "Password" $ parseIf passwordFlag mqttText
 
     return $ Connect clean mWill clientID username password keepAlive
   where
-    protocol = do
+    protocol = ctxt' "protocol" $ do
       prot <- mqttText
       when (prot /= "MQIsdp") $
         fail $ "Invalid protocol: " ++ show prot
 
-    version = do
+    version = ctxt' "version" $ do
       version <- anyWord8'
       when (version /= 3) $
         fail $ "Invalid version: " ++ show version
 
-    getClientID = do
+    getClientID = ctxt' "getClientID" $ do
       before <- get
       clientID <- mqttText
       after <- get
@@ -160,10 +160,10 @@ connect = do
     parseIf flag parser = if flag then Just <$> parser else pure Nothing
 
 connAck :: MessageParser (MessageBody CONNACK)
-connAck = anyWord8' {- reserved -} *> (ConnAck <$> anyWord8')
+connAck = ctxt' "connAck" $ anyWord8' {- reserved -} *> (ConnAck <$> anyWord8')
 
 publish :: MqttHeader -> MessageParser (MessageBody PUBLISH)
-publish header = Publish
+publish header = ctxt' "publish" $ Publish
                   <$> getTopic
                   <*> (if qos header > NoConfirm
                          then Just <$> parseMsgID
@@ -171,18 +171,18 @@ publish header = Publish
                   <*> (get >>= take')
 
 subscribe :: MessageParser (MessageBody SUBSCRIBE)
-subscribe = Subscribe
+subscribe = ctxt' "subscribe" $ Subscribe
               <$> parseMsgID
               <*> whileM ((0 <) <$> get)
                     ((,) <$> getTopic <*> (anyWord8' >>= toQoS))
 
 subAck :: MessageParser (MessageBody SUBACK)
-subAck = SubAck
+subAck = ctxt' "subAck" $ SubAck
           <$> parseMsgID
           <*> whileM ((0 <) <$> get) (anyWord8' >>= toQoS)
 
 unsubscribe :: MessageParser (MessageBody UNSUBSCRIBE)
-unsubscribe = Unsubscribe
+unsubscribe = ctxt' "unsubscribe" $ Unsubscribe
                 <$> parseMsgID
                 <*> whileM ((0 <) <$> get) getTopic
 
@@ -193,15 +193,16 @@ unsubscribe = Unsubscribe
 
 -- | Parse a topic name.
 getTopic :: MessageParser Topic
-getTopic = toTopic <$> mqttText
+getTopic = ctxt' "getTopic" $ toTopic <$> mqttText
 
 -- | Parse a length-prefixed UTF-8 string.
 mqttText :: MessageParser MqttText
-mqttText = MqttText . decodeUtf8With lenientDecode <$> (anyWord16BE >>= take')
+mqttText = ctxt' "mqttText" $
+    MqttText . decodeUtf8With lenientDecode <$> (anyWord16BE >>= take')
 
 -- | Synonym for 'anyWord16BE'.
 parseMsgID :: MessageParser Word16
-parseMsgID = anyWord16BE
+parseMsgID = ctxt' "parseMsgID" anyWord16BE
 
 -- | Parse a big-endian 16bit integer.
 anyWord16BE :: (Num a, Bits a) => MessageParser a
@@ -214,6 +215,12 @@ anyWord16BE = do
 -- the remaining length.
 anyWord8' :: MessageParser Word8
 anyWord8' = parseLength 1 >> lift anyWord8
+
+ctxt :: String -> Parser a -> Parser a
+ctxt = flip (<?>)
+
+ctxt' :: String -> MessageParser a -> MessageParser a
+ctxt' = mapStateT . ctxt
 
 -- | A lifted version of attoparsec's 'take' that also subtracts the
 -- length.
