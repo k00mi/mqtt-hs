@@ -250,7 +250,6 @@ data ConnectError
     | BadLogin
     | Unauthorized
     | UnrecognizedReturnCode
-    | Timeout
     | InvalidResponse
     deriving (Show, Typeable)
 

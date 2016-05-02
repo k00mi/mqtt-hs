@@ -55,13 +55,14 @@ module Network.MQTT
   , module Network.MQTT.Types
   ) where
 
-import Control.Applicative ((<$>), (<$), (<*>))
+import Control.Applicative ((<$>), (<*>))
 import Control.Concurrent
 import qualified Control.Concurrent.Async as Async
 import Control.Concurrent.STM
-import Control.Exception (catch, bracketOnError, IOException, throw)
-import Control.Monad (void, when, forever, filterM)
+import Control.Exception (catch, bracketOnError, IOException)
+import Control.Monad (void, forever, filterM)
 import Control.Monad.IO.Class (liftIO, MonadIO)
+import Control.Monad.Loops (untilJust)
 import Control.Monad.State.Strict (evalStateT, gets, modify, StateT)
 import Data.Attoparsec.ByteString (IResult(..) , parse)
 import Data.ByteString (ByteString)
@@ -108,6 +109,7 @@ data Terminated
     = ParseFailed [String] String
     -- ^ at the context in @['String']@ with the given message.
     | IOErr IOException
+    | ConnectFailed ConnectError
     | UserRequested
     deriving Show
 
@@ -180,13 +182,12 @@ defaultConfig = MQTTConfig
     }
 
 
--- | Establish a connection. Might throw an 'IOException' or a 'ConnectError'.
+-- | Establish a connection. Might throw an 'IOException'.
 connect :: MQTTConfig -> IO MQTT
 connect conf = do
     h <- connectTo (cHost conf) (PortNumber $ cPort conf)
     hSetBinaryMode h True
-    mqtt <- mkMQTT conf h -- `onException` disconnect mqtt
-    mqtt <$ handshake mqtt
+    mkMQTT conf h -- `onException` disconnect mqtt
 
 -- | Start all the threads.
 mkMQTT :: MQTTConfig -> Handle -> IO MQTT
@@ -201,22 +202,6 @@ mkMQTT conf h = do
 
 disconnect :: MQTT -> IO ()
 disconnect mqtt = writeCmd mqtt CmdDisconnect
-
-handshake :: MQTT -> IO ()
-handshake mqtt = do
-    Message _ (ConnAck retCode) <- sendAwait mqtt connect SCONNACK
-    when (retCode /= 0) $ throw (toConnectError retCode)
-  where
-    conf = config mqtt
-    connect = Message
-                (Header False NoConfirm False)
-                (Connect
-                  (cClean conf)
-                  (cWill conf)
-                  (MqttText $ cClientID conf)
-                  (MqttText <$> cUsername conf)
-                  (MqttText <$> cPassword conf)
-                  (maybe 0 fromIntegral $ cKeepAlive conf))
 
 -- | Tell the `MQTT` instance to send the given `Message`.
 -- Any errors that may happen while sending will come up as an `Event` on the
@@ -358,7 +343,10 @@ inputBufferSize = 4048
 mainLoop :: MQTT -> Handle -> IO ()
 mainLoop mqtt h = do
     for_ (sendSignal mqtt) $ forkMQTT mqtt . keepAliveLoop mqtt
-    evalStateT go (MqttState (parse message) BS.empty [])
+    evalStateT
+      (handshake >>=
+        maybe (logDebug mqtt "Connected" >> go) (liftIO . terminate))
+      (MqttState (parse message) BS.empty [])
   `catch`
     \e -> terminate $ IOErr e
   where
@@ -384,6 +372,32 @@ mainLoop mqtt h = do
           CmdStopWaiting awaitMsg -> do
             modify $ \s -> s { msWaiting = filter (== awaitMsg) $ msWaiting s }
             go
+
+    handshake :: StateT MqttState IO (Maybe Terminated)
+    handshake = do
+        doSend msgConnect
+        input <- untilJust
+                  (liftIO (BS.hGetSome h inputBufferSize) >>= parseBytes)
+        case input of
+          InErr err -> return $ Just err
+          InMsg someMsg -> return $ case someMsg of
+            SomeMessage (Message _ (ConnAck retCode)) ->
+              if retCode /= 0
+                then Just $ ConnectFailed $ toConnectError retCode
+                else Nothing
+            _ -> Just $ ConnectFailed InvalidResponse
+          InCmd _ -> error "parseBytes returned InCmd, this should not happen."
+      where
+        conf = config mqtt
+        msgConnect = Message
+                    (Header False NoConfirm False)
+                    (Connect
+                      (cClean conf)
+                      (cWill conf)
+                      (MqttText $ cClientID conf)
+                      (MqttText <$> cUsername conf)
+                      (MqttText <$> cPassword conf)
+                      (maybe 0 fromIntegral $ cKeepAlive conf))
 
     terminate = writeEvent mqtt . Terminated
     msgDisconnect = Message (Header False NoConfirm False) Disconnect
