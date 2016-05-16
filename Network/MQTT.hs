@@ -26,6 +26,8 @@ module Network.MQTT
   -- * Connection settings
   , MQTTConfig
   , defaultConfig
+  , Commands
+  , mkCommands
   -- ** Field accessors
   , cHost
   , cPort
@@ -40,8 +42,6 @@ module Network.MQTT
   , cLogger
   , cPublished
   , cCommands
-  , Command(..)
-  , AwaitMessage(..)
   -- * Subscribing and publishing
   , subscribe
   , unsubscribe
@@ -97,6 +97,11 @@ data Command
     | CmdAwait AwaitMessage
     | CmdStopWaiting AwaitMessage
 
+-- | The communication channel used by 'publish', 'subscribe', etc.
+newtype Commands = Cmds { getCmds :: TChan Command }
+mkCommands :: IO Commands
+mkCommands = Cmds <$> newTChanIO
+
 data AwaitMessage where
     AwaitMessage :: SingI t => MVar (Message t) -> Maybe MsgID -> AwaitMessage
 
@@ -140,13 +145,13 @@ data MQTTConfig
         -- should be acknowledged are retransmitted.
         , cPublished :: TChan (Message PUBLISH)
         -- ^ The channel received 'Publish' messages are written to.
-        , cCommands :: TChan Command
-        -- ^ The channel 'Command's are read from.
+        , cCommands :: Commands
+        -- ^ The channel used by 'publish', 'subscribe', etc.
         }
 
 -- | Defaults for 'MQTTConfig', connects to a server running on
 -- localhost.
-defaultConfig :: TChan Command -> TChan (Message PUBLISH) -> MQTTConfig
+defaultConfig :: Commands -> TChan (Message PUBLISH) -> MQTTConfig
 defaultConfig commands published = MQTTConfig
     { cHost             = "localhost"
     , cPort             = 1883
@@ -166,7 +171,7 @@ defaultConfig commands published = MQTTConfig
 
 
 -- | Connect to the configured broker, write received 'Publish' messages to the
--- 'cPublished' channel and handle 'Command's from the 'cCommands' channel.
+-- 'cPublished' channel and handle commands from the 'cCommands' channel.
 -- Exceptions are propagated.
 run :: MQTTConfig -> IO Terminated
 run conf = do
@@ -384,7 +389,7 @@ mainLoop mqtt h waitTerminate sendSignal = do
 
 waitForInput :: MQTTConfig -> Handle -> StateT MqttState IO Input
 waitForInput mqtt h = do
-    let cmdChan = cCommands mqtt
+    let cmdChan = getCmds $ cCommands mqtt
     unconsumed <- gets msUnconsumed
     if BS.null unconsumed
       then do
@@ -472,4 +477,4 @@ writeTChanIO :: TChan a -> a -> IO ()
 writeTChanIO chan = atomically . writeTChan chan
 
 writeCmd :: MQTTConfig -> Command -> IO ()
-writeCmd mqtt = writeTChanIO (cCommands mqtt)
+writeCmd mqtt = writeTChanIO (getCmds $ cCommands mqtt)
