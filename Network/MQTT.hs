@@ -15,7 +15,6 @@ A simple example, assuming a broker is running on localhost
 (needs -XOverloadedStrings):
 
 >>> import Network.MQTT
->>> import Network.MQTT.Logger
 >>> TODO
 -}
 module Network.MQTT
@@ -39,7 +38,7 @@ module Network.MQTT
   , cClientID
   , cConnectTimeout
   , cReconnPeriod
-  , cLogger
+  , cLogDebug
   , cPublished
   , cCommands
   -- * Subscribing and publishing
@@ -75,7 +74,6 @@ import System.Timeout (timeout)
 import Network.MQTT.Types
 import Network.MQTT.Parser (message)
 import Network.MQTT.Encoding (writeTo)
-import qualified Network.MQTT.Logger as L
 
 -----------------------------------------
 -- Interface
@@ -138,8 +136,8 @@ data MQTTConfig
         , cReconnPeriod :: Maybe Int
         -- ^ Time in seconds to wait between reconnect attempts.
         -- 'Nothing' means no reconnects are attempted.
-        , cLogger :: L.Logger
-        -- ^ Functions for logging, see 'Network.MQTT.Logger.Logger'.
+        , cLogDebug :: String -> IO ()
+        -- ^ Function for debug-level logging.
         , cResendTimeout :: Int
         -- ^ Time in microseconds after which messages that have not been but
         -- should be acknowledged are retransmitted.
@@ -164,7 +162,7 @@ defaultConfig commands published = MQTTConfig
     , cConnectTimeout   = Nothing
     , cResendTimeout    = 20 * 10^6 -- 20 seconds
     , cReconnPeriod     = Nothing
-    , cLogger           = L.stdLogger
+    , cLogDebug         = const $ return ()
     , cCommands         = commands
     , cPublished        = published
     }
@@ -226,7 +224,7 @@ sendAwait mqtt msg _responseS = do
             keepTrying msg' tout = do
               send mqtt msg
               let retry = do
-                    logInfo mqtt "No response within timeout, retransmitting..."
+                    cLogDebug mqtt "No response within timeout, retransmitting..."
                     keepTrying (setDup msg') (tout * 2)
               timeout tout wait >>= maybe retry return
         in keepTrying msg (cResendTimeout mqtt))
@@ -282,23 +280,6 @@ publish mqtt qos retain topic body = do
 
 
 -----------------------------------------
--- Logger utility functions
------------------------------------------
-
-logDebug :: MonadIO io => MQTTConfig -> String -> io ()
-logDebug mqtt = liftIO . L.logDebug (cLogger mqtt)
-
-logInfo :: MonadIO io => MQTTConfig -> String -> io ()
-logInfo mqtt = liftIO . L.logInfo (cLogger mqtt)
-
-logWarning :: MonadIO io => MQTTConfig -> String -> io ()
-logWarning mqtt = liftIO . L.logWarning (cLogger mqtt)
-
-logError :: MonadIO io => MQTTConfig -> String -> io ()
-logError mqtt = liftIO . L.logError (cLogger mqtt)
-
-
------------------------------------------
 -- Internal
 -----------------------------------------
 
@@ -328,7 +309,7 @@ mainLoop :: MQTTConfig -> Handle -> WaitTerminate -> SendSignal -> IO Terminated
 mainLoop mqtt h waitTerminate sendSignal = do
     void $ forkMQTT waitTerminate $ keepAliveLoop mqtt sendSignal
     evalStateT
-      (handshake >>= maybe (logDebug mqtt "Connected" >> go) return)
+      (handshake >>= maybe (liftIO (cLogDebug mqtt "Connected") >> go) return)
       (MqttState (parse message) BS.empty [])
   where
     go = do
@@ -337,7 +318,7 @@ mainLoop mqtt h waitTerminate sendSignal = do
         InErr err -> liftIO $
           return err
         InMsg someMsg -> do
-          logDebug mqtt $ "Received " ++ show (toMsgType' someMsg)
+          liftIO $ cLogDebug mqtt $ "Received " ++ show (toMsgType' someMsg)
           handleMessage mqtt waitTerminate someMsg
           go
         InCmd cmd -> case cmd of
@@ -383,7 +364,7 @@ mainLoop mqtt h waitTerminate sendSignal = do
 
     doSend :: (MonadIO io, SingI t) => Message t -> io ()
     doSend msg = liftIO $ do
-        logDebug mqtt $ "Sending " ++ show (toMsgType msg)
+        cLogDebug mqtt $ "Sending " ++ show (toMsgType msg)
         writeTo h msg
         void $ tryPutMVar sendSignal ()
 
