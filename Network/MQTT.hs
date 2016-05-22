@@ -5,7 +5,7 @@
              DeriveDataTypeable #-}
 {-|
 Module: MQTT
-Copyright: Lukas Braun 2014
+Copyright: Lukas Braun 2014-2016
 License: GPL-3
 Maintainer: koomi+mqtt@hackerspace-bamberg.de
 
