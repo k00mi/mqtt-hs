@@ -216,7 +216,7 @@ sendAwait mqtt msg _responseS = do
                 then return received
                 else wait
             keepTrying msg' tout = do
-              send mqtt msg
+              send mqtt msg'
               let retransmit = do
                     cLogDebug mqtt "No response within timeout, retransmitting..."
                     keepTrying (setDup msg') (tout * 2)
