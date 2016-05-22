@@ -105,6 +105,7 @@ data MqttHeader
         }
     deriving (Eq, Ord, Show)
 
+-- | Set the 'dup' flag to 'True'.
 setDup :: Message t -> Message t
 setDup (Message h b) = Message h { dup = True } b
 
@@ -122,8 +123,8 @@ data MessageBody (t :: MsgType) where
                    , password :: Maybe MqttText
                    -- ^ Optional password used for authentication.
                    , keepAlive :: Word16
-                   -- ^ Maximum interval (in seconds) in which a message must be sent.
-                   -- 0 means no limit.
+                   -- ^ Time (in seconds) after which a 'PingReq' is sent to the broker if
+                   -- no regular message was sent. 0 means no limit.
                    }                              -> MessageBody CONNECT
     ConnAck     :: { returnCode :: Word8 }        -> MessageBody CONNACK
     Publish     :: { topic :: Topic
@@ -197,15 +198,25 @@ getMsgID PingReq               = Nothing
 getMsgID PingResp              = Nothing
 getMsgID Disconnect            = Nothing
 
--- | A topic is a "hierarchical name space that defines a taxonomy of
--- information sources for which subscribers can register an interest."
+-- | A topic is a \"hierarchical name space that defines a taxonomy of
+-- information sources for which subscribers can register an interest.\"
+-- See the
+-- <http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#appendix-a specification>
+-- for more details.
 --
--- See
--- <http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#appendix-a here>
--- for more information on topics.
+-- A topic can be inspected by using the 'matches' function or after using
+-- 'getLevels', e.g.:
+--
+-- > f1 topic
+-- >   | topic `matches` "mqtt/hs/example" = putStrLn "example"
+-- >   | topic `matches` "mqtt/hs/#" = putStrLn "wildcard"
+-- >
+-- > f2 topic = case getLevels topic of
+-- >              ["mqtt", "hs", "example"] -> putStrLn "example"
+-- >              "mqtt" : "hs" : _ -> putStrLn "wildcard"
 data Topic = Topic { levels :: [Text], orig :: Text }
--- levels and orig should always refer to the same topic, this way no text
--- has to be copied when converting from/to text
+-- levels and orig should always refer to the same topic, so no text has to be
+-- copied when converting from/to text
 
 instance Show Topic where
     show (Topic _ t) = show t
@@ -213,7 +224,9 @@ instance Show Topic where
 instance Eq Topic where
     Topic _ t1 == Topic _ t2 = t1 == t2
 
--- | Check if one of the 'Topic's matches the other.
+-- | Check if one of the 'Topic's matches the other, taking
+-- <http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#appendix-a wildcards>
+-- into consideration.
 matches :: Topic -> Topic -> Bool
 matches (Topic t1 _) (Topic t2 _) = go t1 t2
       where
@@ -242,7 +255,7 @@ instance IsString Topic where
     fromString str = let txt = T.pack str in
       Topic (T.split (== '/') txt) txt
 
--- | Reasons connecting to a broker might fail.
+-- | Reasons why connecting to a broker might fail.
 data ConnectError
     = WrongProtocolVersion
     | IdentifierRejected

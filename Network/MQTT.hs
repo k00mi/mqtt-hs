@@ -18,16 +18,15 @@ A simple example, assuming a broker is running on localhost
 >>> TODO
 -}
 module Network.MQTT
-  ( -- * Creating connections
+  ( -- * Setup
     run
   , Terminated(..)
   , disconnect
-  -- * Connection settings
   , MQTTConfig
   , defaultConfig
   , Commands
   , mkCommands
-  -- ** Field accessors
+  -- ** MQTTConfig accessors
   , cHost
   , cPort
   , cClean
@@ -83,10 +82,10 @@ data Terminated
     -- ^ at the context in @['String']@ with the given message.
     | ConnectFailed ConnectError
     | UserRequested
+    -- ^ 'disconnect' was called
     deriving Show
 
 -- | Commands from the user for the library.
--- Used by 'subscribe', 'publish' etc.
 data Command
     = CmdDisconnect
     | CmdSend SomeMessage
@@ -124,8 +123,8 @@ data MQTTConfig
         , cPassword :: Maybe Text
         -- ^ Optional password used for authentication.
         , cKeepAlive :: Maybe Int
-        -- ^ Maximum interval (in seconds) in which a message must be sent.
-        -- 0 means no limit.
+        -- ^ Time (in seconds) after which a 'PingReq' is sent to the broker if
+        -- no regular message was sent. 'Nothing' means no limit.
         , cClientID :: Text
         -- ^ Client ID used by the server to identify clients.
         , cLogDebug :: String -> IO ()
@@ -160,6 +159,7 @@ defaultConfig commands published = MQTTConfig
 
 -- | Connect to the configured broker, write received 'Publish' messages to the
 -- 'cPublished' channel and handle commands from the 'cCommands' channel.
+--
 -- Exceptions are propagated.
 run :: MQTTConfig -> IO Terminated
 run conf = do
@@ -171,32 +171,31 @@ run conf = do
       `finally` atomically (putTMVar terminatedVar ())
 
 -- | Close the connection after sending a 'Disconnect' message.
+--
+-- See also: 'Will'
 disconnect :: MQTTConfig -> IO ()
 disconnect mqtt = writeCmd mqtt CmdDisconnect
 
--- | Tell the `MQTT` instance to send the given `Message`.
+-- | Tell the 'mainLoop' to send the given 'Message'.
 send :: SingI t => MQTTConfig -> Message t -> IO ()
 send mqtt = writeCmd mqtt . CmdSend . SomeMessage
 
--- | Tell the `MQTT` instance to place the next `Message` of correct
--- `MsgType` and `MsgID` (if present) into the `MVar`.
+-- | Tell the 'MQTT' instance to place the next 'Message' of correct
+-- 'MsgType' and 'MsgID' (if present) into the 'MVar'.
 registerVar :: SingI t => MQTTConfig -> MVar (Message t) -> Maybe MsgID -> IO ()
 registerVar mqtt var = writeCmd mqtt . CmdAwait . AwaitMessage var
 
--- | Stop waiting for the described `Message`.
+-- | Stop waiting for the described 'Message'.
 unregisterVar :: SingI t => MQTTConfig -> MVar (Message t) -> Maybe MsgID -> IO ()
 unregisterVar mqtt var = writeCmd mqtt . CmdStopWaiting . AwaitMessage var
 
 -- | Execute the common pattern of sending a message and awaiting
 -- a response in a safe, non-racy way. The message message is retransmitted
--- if no response has been received after 'cResendTimeout' microseconds.
--- Exponential backoff is used for further retransmissions
+-- if no response has been received after 'cResendTimeout' microseconds, with
+-- exponential backoff for further retransmissions
+--
 -- An incoming message is considered a response if it is of the
 -- requested type and the 'MsgID's match (if present).
---
--- Note this expects a singleton to guarantee the returned 'Message' is of
--- the 'MsgType' that is being waited for. Singleton constructors are the
--- 'MsgType' constructors prefixed with a capital @S@, e.g. 'SPUBLISH'.
 sendAwait :: (SingI t, SingI r)
           => MQTTConfig -> Message t -> SMsgType r -> IO (Message r)
 sendAwait mqtt msg _responseS = do
@@ -223,7 +222,7 @@ sendAwait mqtt msg _responseS = do
 -- granted by the broker (lower or equal to the one requested).
 --
 -- The 'Topic' may contain
--- <http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#appendix-a wildcars>.
+-- <http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#appendix-a wildcards>.
 subscribe :: MQTTConfig -> QoS -> Topic -> IO QoS
 subscribe mqtt qos topic = do
     msgID <- fromIntegral . hashUnique <$> newUnique
@@ -246,9 +245,9 @@ unsubscribe mqtt topic = do
            SUNSUBACK
 
 -- | Publish a message to the given 'Topic' at the requested 'QoS' level.
--- The payload can be any sequence of bytes, including none at all. The 'Bool'
--- parameter decides if the server should retain the message for future
--- subscribers to the topic.
+-- The payload can be any sequence of bytes, including none at all.
+-- 'True' means the server should retain the message for future subscribers to
+-- the topic.
 --
 -- The 'Topic' must not contain
 -- <http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#appendix-a wildcards>.
@@ -378,7 +377,9 @@ waitForInput mqtt h = do
   where
     returnIfDone bytes = parseBytes bytes >>= maybe (waitForInput mqtt h) return
 
--- | Parse the given 'ByteString', returning 'Nothing' if more input is needed.
+-- | Parse the given 'ByteString' and update the current 'MqttState'.
+--
+-- Returns 'Nothing' if more input is needed.
 parseBytes :: Monad m => ByteString -> StateT MqttState m (Maybe Input)
 parseBytes bytes = do
     parseCC <- gets msParseCC
@@ -438,8 +439,8 @@ publishHandler mqtt msg = do
     release = writeTChanIO (cPublished mqtt) msg
 
 
--- | Runs the `IO` action in a seperate thread and cancels it if the main MQTT
--- loop exits earlier.
+-- | Runs the 'IO' action in a seperate thread and cancels it if the 'mainLoop'
+-- exits earlier.
 forkMQTT :: WaitTerminate -> IO () -> IO (Async.Async ())
 forkMQTT waitTerminate action = Async.async $ Async.withAsync action $ \forked ->
     atomically $ waitTerminate `orElse` Async.waitSTM forked
