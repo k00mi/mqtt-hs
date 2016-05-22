@@ -182,12 +182,17 @@ send mqtt = writeCmd mqtt . CmdSend . SomeMessage
 
 -- | Tell the 'MQTT' instance to place the next 'Message' of correct
 -- 'MsgType' and 'MsgID' (if present) into the 'MVar'.
-registerVar :: SingI t => MQTTConfig -> MVar (Message t) -> Maybe MsgID -> IO ()
-registerVar mqtt var = writeCmd mqtt . CmdAwait . AwaitMessage var
+await :: SingI t => MQTTConfig -> MVar (Message t) -> Maybe MsgID
+            -> IO AwaitMessage
+await mqtt var mMsgID = do
+    writeCmd mqtt $ CmdAwait awaitMsg
+    return awaitMsg
+  where
+    awaitMsg = AwaitMessage var mMsgID
 
 -- | Stop waiting for the described 'Message'.
-unregisterVar :: SingI t => MQTTConfig -> MVar (Message t) -> Maybe MsgID -> IO ()
-unregisterVar mqtt var = writeCmd mqtt . CmdStopWaiting . AwaitMessage var
+stopWaiting :: MQTTConfig -> AwaitMessage -> IO ()
+stopWaiting mqtt = writeCmd mqtt . CmdStopWaiting
 
 -- | Execute the common pattern of sending a message and awaiting
 -- a response in a safe, non-racy way. The message message is retransmitted
@@ -202,8 +207,8 @@ sendAwait mqtt msg _responseS = do
     var <- newEmptyMVar
     let mMsgID = getMsgID (body msg)
     bracketOnError
-      (registerVar mqtt var mMsgID)
-      (\_ -> unregisterVar mqtt var mMsgID)
+      (await mqtt var mMsgID)
+      (stopWaiting mqtt)
       (\_ ->
         let wait = do
               msg <- readMVar var
