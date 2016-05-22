@@ -59,11 +59,12 @@ import Data.Attoparsec.ByteString (IResult(..) , parse)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Foldable (for_)
-import Data.Maybe (isNothing, fromJust)
+import Data.Maybe (isNothing, fromJust, fromMaybe)
 import Data.Singletons (SingI(..))
 import Data.Singletons.Decide
 import Data.Text (Text)
 import Data.Unique
+import Data.Word (Word16)
 import Network
 import System.IO (Handle, hSetBinaryMode, hLookAhead)
 import System.Timeout (timeout)
@@ -122,7 +123,7 @@ data Config
         -- ^ Optional username used for authentication.
         , cPassword :: Maybe Text
         -- ^ Optional password used for authentication.
-        , cKeepAlive :: Maybe Int
+        , cKeepAlive :: Maybe Word16
         -- ^ Time (in seconds) after which a 'PingReq' is sent to the broker if
         -- no regular message was sent. 'Nothing' means no limit.
         , cClientID :: Text
@@ -350,7 +351,7 @@ mainLoop mqtt h waitTerminate sendSignal = do
                       (MqttText $ cClientID mqtt)
                       (MqttText <$> cUsername mqtt)
                       (MqttText <$> cPassword mqtt)
-                      (maybe 0 fromIntegral $ cKeepAlive mqtt))
+                      (fromMaybe 0 $ cKeepAlive mqtt))
 
     msgDisconnect = Message (Header False NoConfirm False) Disconnect
 
@@ -418,7 +419,7 @@ handleMessage mqtt waitTerminate (SomeMessage msg) =
 
 keepAliveLoop :: Config -> SendSignal -> IO ()
 keepAliveLoop mqtt signal = for_ (cKeepAlive mqtt) $ \tout -> forever $ do
-    rslt <- timeout (tout * 10^6) (takeMVar signal)
+    rslt <- timeout (fromIntegral tout * 10^6) (takeMVar signal)
     case rslt of
       Nothing -> void $ sendAwait mqtt
                   (Message (Header False NoConfirm False) PingReq)
