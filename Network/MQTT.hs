@@ -218,30 +218,28 @@ sendAwait mqtt msg _responseS = do
               timeout tout wait >>= maybe retry return
         in keepTrying msg (cResendTimeout mqtt))
 
--- | Subscribe to a 'Topic' with the given 'QoS'. Returns the 'QoS' that was
--- granted by the broker (lower or equal to the one requested).
+-- | Subscribe to the 'Topic's with the corresponding 'QoS'.
+-- Returns the 'QoS' that were granted (lower or equal to the ones requested)
+-- in the same order.
 --
--- The 'Topic' may contain
+-- The 'Topic's may contain
 -- <http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#appendix-a wildcards>.
-subscribe :: MQTTConfig -> QoS -> Topic -> IO QoS
-subscribe mqtt qos topic = do
+subscribe :: MQTTConfig -> [(Topic, QoS)] -> IO [QoS]
+subscribe mqtt topics = do
     msgID <- fromIntegral . hashUnique <$> newUnique
     msg <- sendAwait mqtt
              (Message
                (Header False Confirm False)
-               (Subscribe msgID [(topic, qos)]))
+               (Subscribe msgID topics))
              SSUBACK
-    case granted $ body $ msg of
-      [qosGranted] -> return qosGranted
-      _ -> fail $ "Received invalid message as response to subscribe: "
-                    ++ show (toMsgType msg)
+    return $ granted $ body $ msg
 
--- | Unsubscribe from the given 'Topic'.
-unsubscribe :: MQTTConfig -> Topic -> IO ()
-unsubscribe mqtt topic = do
+-- | Unsubscribe from the given 'Topic's.
+unsubscribe :: MQTTConfig -> [Topic] -> IO ()
+unsubscribe mqtt topics = do
     msgID <- fromIntegral . hashUnique <$> newUnique
     void $ sendAwait mqtt
-           (Message (Header False Confirm False) (Unsubscribe msgID [topic]))
+           (Message (Header False Confirm False) (Unsubscribe msgID topics))
            SUNSUBACK
 
 -- | Publish a message to the given 'Topic' at the requested 'QoS' level.
