@@ -373,12 +373,12 @@ waitForInput mqtt h = do
                   (void $ atomically $ peekTChan cmdChan)
         -- now we have committed to one source and can actually read it
         case input of
-          Left () -> liftIO (BS.hGetSome h inputBufferSize) >>= returnIfDone
+          Left () -> liftIO (BS.hGetSome h inputBufferSize) >>= parseUntilDone
           Right () -> InCmd <$> liftIO (atomically (readTChan cmdChan))
       else
-        returnIfDone unconsumed
+        parseUntilDone unconsumed
   where
-    returnIfDone bytes = parseBytes bytes >>= maybe (waitForInput mqtt h) return
+    parseUntilDone bytes = parseBytes bytes >>= maybe (waitForInput mqtt h) return
 
 -- | Parse the given 'ByteString' and update the current 'MqttState'.
 --
@@ -403,11 +403,11 @@ handleMessage mqtt waitTerminate (SomeMessage msg) =
     case toSMsgType msg %~ SPUBLISH of
       Proved Refl -> liftIO $ void $ forkMQTT waitTerminate $ publishHandler mqtt msg
       Disproved _ -> do
-        waiting' <- gets msWaiting >>= liftIO . filterM passOnMatching
+        waiting' <- gets msWaiting >>= liftIO . filterM giveToWaiting
         modify (\s -> s { msWaiting = waiting' })
   where
-    passOnMatching :: AwaitMessage -> IO Bool
-    passOnMatching (AwaitMessage (var :: MVar (Message t')) mMsgID')
+    giveToWaiting :: AwaitMessage -> IO Bool
+    giveToWaiting (AwaitMessage (var :: MVar (Message t')) mMsgID')
       | isNothing mMsgID || mMsgID == mMsgID' =
         case toSMsgType msg %~ (sing :: SMsgType t') of
           Proved Refl -> putMVar var msg >> return False
