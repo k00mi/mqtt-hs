@@ -36,8 +36,6 @@ module Network.MQTT
   , cPassword
   , cKeepAlive
   , cClientID
-  , cConnectTimeout
-  , cReconnPeriod
   , cLogDebug
   , cPublished
   , cCommands
@@ -130,12 +128,6 @@ data MQTTConfig
         -- 0 means no limit.
         , cClientID :: Text
         -- ^ Client ID used by the server to identify clients.
-        , cConnectTimeout :: Maybe Int
-        -- ^ Time in seconds after which waiting for a CONNACK is aborted.
-        -- 'Nothing' means no timeout.
-        , cReconnPeriod :: Maybe Int
-        -- ^ Time in seconds to wait between reconnect attempts.
-        -- 'Nothing' means no reconnects are attempted.
         , cLogDebug :: String -> IO ()
         -- ^ Function for debug-level logging.
         , cResendTimeout :: Int
@@ -159,9 +151,7 @@ defaultConfig commands published = MQTTConfig
     , cPassword         = Nothing
     , cKeepAlive        = Nothing
     , cClientID         = "mqtt-haskell"
-    , cConnectTimeout   = Nothing
     , cResendTimeout    = 20 * 10^6 -- 20 seconds
-    , cReconnPeriod     = Nothing
     , cLogDebug         = const $ return ()
     , cCommands         = commands
     , cPublished        = published
