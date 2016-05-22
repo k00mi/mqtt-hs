@@ -22,11 +22,11 @@ module Network.MQTT
     run
   , Terminated(..)
   , disconnect
-  , MQTTConfig
+  , Config
   , defaultConfig
   , Commands
   , mkCommands
-  -- ** MQTTConfig accessors
+  -- ** Config accessors
   , cHost
   , cPort
   , cClean
@@ -107,8 +107,8 @@ instance Eq AwaitMessage where
       Disproved _ -> False
 
 -- | The various options when establishing a connection.
-data MQTTConfig
-    = MQTTConfig
+data Config
+    = Config
         { cHost :: HostName
         -- ^ Hostname of the broker.
         , cPort :: PortNumber
@@ -138,10 +138,10 @@ data MQTTConfig
         -- ^ The channel used by 'publish', 'subscribe', etc.
         }
 
--- | Defaults for 'MQTTConfig', connects to a server running on
+-- | Defaults for 'Config', connects to a server running on
 -- localhost.
-defaultConfig :: Commands -> TChan (Message PUBLISH) -> MQTTConfig
-defaultConfig commands published = MQTTConfig
+defaultConfig :: Commands -> TChan (Message PUBLISH) -> Config
+defaultConfig commands published = Config
     { cHost             = "localhost"
     , cPort             = 1883
     , cClean            = True
@@ -161,7 +161,7 @@ defaultConfig commands published = MQTTConfig
 -- 'cPublished' channel and handle commands from the 'cCommands' channel.
 --
 -- Exceptions are propagated.
-run :: MQTTConfig -> IO Terminated
+run :: Config -> IO Terminated
 run conf = do
     h <- connectTo (cHost conf) (PortNumber $ cPort conf)
     hSetBinaryMode h True
@@ -173,16 +173,16 @@ run conf = do
 -- | Close the connection after sending a 'Disconnect' message.
 --
 -- See also: 'Will'
-disconnect :: MQTTConfig -> IO ()
+disconnect :: Config -> IO ()
 disconnect mqtt = writeCmd mqtt CmdDisconnect
 
 -- | Tell the 'mainLoop' to send the given 'Message'.
-send :: SingI t => MQTTConfig -> Message t -> IO ()
+send :: SingI t => Config -> Message t -> IO ()
 send mqtt = writeCmd mqtt . CmdSend . SomeMessage
 
 -- | Tell the 'MQTT' instance to place the next 'Message' of correct
 -- 'MsgType' and 'MsgID' (if present) into the 'MVar'.
-await :: SingI t => MQTTConfig -> MVar (Message t) -> Maybe MsgID
+await :: SingI t => Config -> MVar (Message t) -> Maybe MsgID
             -> IO AwaitMessage
 await mqtt var mMsgID = do
     writeCmd mqtt $ CmdAwait awaitMsg
@@ -191,7 +191,7 @@ await mqtt var mMsgID = do
     awaitMsg = AwaitMessage var mMsgID
 
 -- | Stop waiting for the described 'Message'.
-stopWaiting :: MQTTConfig -> AwaitMessage -> IO ()
+stopWaiting :: Config -> AwaitMessage -> IO ()
 stopWaiting mqtt = writeCmd mqtt . CmdStopWaiting
 
 -- | Execute the common pattern of sending a message and awaiting
@@ -202,7 +202,7 @@ stopWaiting mqtt = writeCmd mqtt . CmdStopWaiting
 -- An incoming message is considered a response if it is of the
 -- requested type and the 'MsgID's match (if present).
 sendAwait :: (SingI t, SingI r)
-          => MQTTConfig -> Message t -> SMsgType r -> IO (Message r)
+          => Config -> Message t -> SMsgType r -> IO (Message r)
 sendAwait mqtt msg _responseS = do
     var <- newEmptyMVar
     let mMsgID = getMsgID (body msg)
@@ -229,7 +229,7 @@ sendAwait mqtt msg _responseS = do
 --
 -- The 'Topic's may contain
 -- <http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#appendix-a wildcards>.
-subscribe :: MQTTConfig -> [(Topic, QoS)] -> IO [QoS]
+subscribe :: Config -> [(Topic, QoS)] -> IO [QoS]
 subscribe mqtt topics = do
     msgID <- fromIntegral . hashUnique <$> newUnique
     msg <- sendAwait mqtt
@@ -240,7 +240,7 @@ subscribe mqtt topics = do
     return $ granted $ body $ msg
 
 -- | Unsubscribe from the given 'Topic's.
-unsubscribe :: MQTTConfig -> [Topic] -> IO ()
+unsubscribe :: Config -> [Topic] -> IO ()
 unsubscribe mqtt topics = do
     msgID <- fromIntegral . hashUnique <$> newUnique
     void $ sendAwait mqtt
@@ -254,7 +254,7 @@ unsubscribe mqtt topics = do
 --
 -- The 'Topic' must not contain
 -- <http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/mqtt-v3r1.html#appendix-a wildcards>.
-publish :: MQTTConfig -> QoS -> Bool -> Topic -> ByteString -> IO ()
+publish :: Config -> QoS -> Bool -> Topic -> ByteString -> IO ()
 publish mqtt qos retain topic body = do
     msgID <- if qos > NoConfirm
                then Just . fromIntegral . hashUnique <$> newUnique
@@ -297,7 +297,7 @@ inputBufferSize = 4048
 type WaitTerminate = STM ()
 type SendSignal = MVar ()
 
-mainLoop :: MQTTConfig -> Handle -> WaitTerminate -> SendSignal -> IO Terminated
+mainLoop :: Config -> Handle -> WaitTerminate -> SendSignal -> IO Terminated
 mainLoop mqtt h waitTerminate sendSignal = do
     void $ forkMQTT waitTerminate $ keepAliveLoop mqtt sendSignal
     evalStateT
@@ -360,7 +360,7 @@ mainLoop mqtt h waitTerminate sendSignal = do
         writeTo h msg
         void $ tryPutMVar sendSignal ()
 
-waitForInput :: MQTTConfig -> Handle -> StateT MqttState IO Input
+waitForInput :: Config -> Handle -> StateT MqttState IO Input
 waitForInput mqtt h = do
     let cmdChan = getCmds $ cCommands mqtt
     unconsumed <- gets msUnconsumed
@@ -398,7 +398,7 @@ parseBytes bytes = do
                            , msUnconsumed = unconsumed }
           return $ Just $ InMsg someMsg
 
-handleMessage :: MQTTConfig -> WaitTerminate -> SomeMessage -> StateT MqttState IO ()
+handleMessage :: Config -> WaitTerminate -> SomeMessage -> StateT MqttState IO ()
 handleMessage mqtt waitTerminate (SomeMessage msg) =
     case toSMsgType msg %~ SPUBLISH of
       Proved Refl -> liftIO $ void $ forkMQTT waitTerminate $ publishHandler mqtt msg
@@ -416,7 +416,7 @@ handleMessage mqtt waitTerminate (SomeMessage msg) =
 
     mMsgID = getMsgID (body msg)
 
-keepAliveLoop :: MQTTConfig -> SendSignal -> IO ()
+keepAliveLoop :: Config -> SendSignal -> IO ()
 keepAliveLoop mqtt signal = for_ (cKeepAlive mqtt) $ \tout -> forever $ do
     rslt <- timeout (tout * 10^6) (takeMVar signal)
     case rslt of
@@ -425,7 +425,7 @@ keepAliveLoop mqtt signal = for_ (cKeepAlive mqtt) $ \tout -> forever $ do
                   SPINGRESP
       Just _ -> return ()
 
-publishHandler :: MQTTConfig -> Message PUBLISH -> IO ()
+publishHandler :: Config -> Message PUBLISH -> IO ()
 publishHandler mqtt msg = do
     case (qos (header msg), pubMsgID (body msg)) of
       (Confirm, Just msgid) -> do
@@ -451,5 +451,5 @@ forkMQTT waitTerminate action = Async.async $ Async.withAsync action $ \forked -
 writeTChanIO :: TChan a -> a -> IO ()
 writeTChanIO chan = atomically . writeTChan chan
 
-writeCmd :: MQTTConfig -> Command -> IO ()
+writeCmd :: Config -> Command -> IO ()
 writeCmd mqtt = writeTChanIO (getCmds $ cCommands mqtt)
