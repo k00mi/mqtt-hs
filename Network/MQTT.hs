@@ -211,16 +211,16 @@ sendAwait mqtt msg _responseS = do
       (stopWaiting mqtt)
       (\_ ->
         let wait = do
-              msg <- readMVar var
-              if isNothing mMsgID || mMsgID == getMsgID (body msg)
-                then return msg
+              received <- readMVar var
+              if isNothing mMsgID || mMsgID == getMsgID (body received)
+                then return received
                 else wait
             keepTrying msg' tout = do
               send mqtt msg
-              let retry = do
+              let retransmit = do
                     cLogDebug mqtt "No response within timeout, retransmitting..."
                     keepTrying (setDup msg') (tout * 2)
-              timeout tout wait >>= maybe retry return
+              timeout tout wait >>= maybe retransmit return
         in keepTrying msg (cResendTimeout mqtt))
 
 -- | Subscribe to the 'Topic's with the corresponding 'QoS'.
