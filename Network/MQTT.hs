@@ -9,13 +9,7 @@ Copyright: Lukas Braun 2014-2016
 License: GPL-3
 Maintainer: koomi+mqtt@hackerspace-bamberg.de
 
-A MQTT client library.
-
-A simple example, assuming a broker is running on localhost
-(needs -XOverloadedStrings):
-
->>> import Network.MQTT
->>> TODO
+An MQTT client library.
 -}
 module Network.MQTT
   ( -- * Setup
