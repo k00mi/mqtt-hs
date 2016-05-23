@@ -36,6 +36,8 @@ module Network.MQTT.Internal
   , parseBytes
   , handleMessage
   , publishHandler
+  -- * Misc
+  , secToMicro
   ) where
 
 import Control.Applicative ((<$>))
@@ -325,7 +327,7 @@ handleMessage mqtt waitTerminate (SomeMessage msg) =
 
 keepAliveLoop :: Config -> SendSignal -> IO ()
 keepAliveLoop mqtt signal = for_ (cKeepAlive mqtt) $ \tout -> forever $ do
-    rslt <- timeout (fromIntegral tout * 10^6) (takeMVar signal)
+    rslt <- timeout (secToMicro (fromIntegral tout)) (takeMVar signal)
     case rslt of
       Nothing -> void $ sendAwait mqtt
                   (Message (Header False NoConfirm False) PingReq)
@@ -359,3 +361,6 @@ writeTChanIO chan = atomically . writeTChan chan
 
 writeCmd :: Config -> Command -> IO ()
 writeCmd mqtt = writeTChanIO (getCmds $ cCommands mqtt)
+
+secToMicro :: Int -> Int
+secToMicro m = m * 10 ^ (6 :: Int)

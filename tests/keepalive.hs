@@ -30,7 +30,7 @@ main = do
     publish mqtt NoConfirm False t p
     CmdSend (SomeMessage (Message _h (Publish{}))) <- atomically (readTChan cmds')
 
-    maybeAwait <- timeout (fromIntegral tout * 2 * 10^6) $
+    maybeAwait <- timeout (secToMicro (fromIntegral tout * 2)) $
                     atomically (readTChan cmds')
     case maybeAwait of
       Nothing -> putStrLn "FAILED: no CmdAwait within timeout"
