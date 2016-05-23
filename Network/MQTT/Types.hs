@@ -10,9 +10,12 @@
              TemplateHaskell
              #-}
 
--- without this GHC 7.6.3 loops while building, probably related to
+-- without -O0 GHC 7.6.3 loops while building, probably related to
 -- https://git.haskell.org/ghc.git/commitdiff/c1edbdfd9148ad9f74bfe41e76c524f3e775aaaa
-{-# OPTIONS_GHC -O0 #-}
+--
+-- -fno-warn-unused-binds is used because the Singletons TH magic generates a
+-- lot of unused binds and GHC has no way to disable warnings locally
+{-# OPTIONS_GHC -O0 -fno-warn-unused-binds #-}
 
 {-|
 Module: MQTT.Types
