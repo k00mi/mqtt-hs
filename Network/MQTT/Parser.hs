@@ -16,7 +16,6 @@ import Control.Applicative
 import Data.Attoparsec.ByteString
 import Data.Bits
 import qualified Data.ByteString as BS
-import Data.Singletons (SingI)
 import Data.Text.Encoding (decodeUtf8With)
 import Data.Text.Encoding.Error (lenientDecode)
 import Data.Word
@@ -88,8 +87,7 @@ parseRemaining = ctxt "parseRemaining" $ do
 
 -- | «@mqttBody header msgtype remaining@» parses a 'Message' of type
 -- @msgtype@ that is @remaining@ bytes long.
-mqttBody :: SingI t
-         => MqttHeader -> SMsgType t -> Word32 -> Parser (MessageBody t)
+mqttBody :: MqttHeader -> SMsgType t -> Word32 -> Parser (MessageBody t)
 mqttBody header msgType remaining = ctxt "mqttBody" $
     let parser =
           case msgType of
