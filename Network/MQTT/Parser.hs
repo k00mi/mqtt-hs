@@ -109,7 +109,7 @@ mqttBody header msgType remaining = ctxt "mqttBody" $
             SDISCONNECT  -> pure Disconnect
     in evalStateT parser remaining
 
-connect :: MessageParser (MessageBody CONNECT)
+connect :: MessageParser (MessageBody 'CONNECT)
 connect = ctxt' "connect" $ do
     protocol
     version
@@ -159,10 +159,10 @@ connect = ctxt' "connect" $ do
     parseIf :: Applicative f => Bool -> f a -> f (Maybe a)
     parseIf flag parser = if flag then Just <$> parser else pure Nothing
 
-connAck :: MessageParser (MessageBody CONNACK)
+connAck :: MessageParser (MessageBody 'CONNACK)
 connAck = ctxt' "connAck" $ anyWord8' {- reserved -} *> (ConnAck <$> anyWord8')
 
-publish :: MqttHeader -> MessageParser (MessageBody PUBLISH)
+publish :: MqttHeader -> MessageParser (MessageBody 'PUBLISH)
 publish header = ctxt' "publish" $ Publish
                   <$> getTopic
                   <*> (if qos header > NoConfirm
@@ -170,18 +170,18 @@ publish header = ctxt' "publish" $ Publish
                          else return Nothing)
                   <*> (get >>= take')
 
-subscribe :: MessageParser (MessageBody SUBSCRIBE)
+subscribe :: MessageParser (MessageBody 'SUBSCRIBE)
 subscribe = ctxt' "subscribe" $ Subscribe
               <$> parseMsgID
               <*> whileM ((0 <) <$> get)
                     ((,) <$> getTopic <*> (anyWord8' >>= toQoS))
 
-subAck :: MessageParser (MessageBody SUBACK)
+subAck :: MessageParser (MessageBody 'SUBACK)
 subAck = ctxt' "subAck" $ SubAck
           <$> parseMsgID
           <*> whileM ((0 <) <$> get) (anyWord8' >>= toQoS)
 
-unsubscribe :: MessageParser (MessageBody UNSUBSCRIBE)
+unsubscribe :: MessageParser (MessageBody 'UNSUBSCRIBE)
 unsubscribe = ctxt' "unsubscribe" $ Unsubscribe
                 <$> parseMsgID
                 <*> whileM ((0 <) <$> get) getTopic

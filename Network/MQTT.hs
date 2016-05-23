@@ -57,7 +57,7 @@ import Network.MQTT.Types
 
 -- | Defaults for 'Config', connects to a server running on
 -- localhost.
-defaultConfig :: Commands -> TChan (Message PUBLISH) -> Config
+defaultConfig :: Commands -> TChan (Message 'PUBLISH) -> Config
 defaultConfig commands published = Config
     { cHost             = "localhost"
     , cPort             = 1883

@@ -125,36 +125,36 @@ data MessageBody (t :: MsgType) where
                    , keepAlive :: Word16
                    -- ^ Time (in seconds) after which a 'PingReq' is sent to the broker if
                    -- no regular message was sent. 0 means no limit.
-                   }                              -> MessageBody CONNECT
-    ConnAck     :: { returnCode :: Word8 }        -> MessageBody CONNACK
+                   }                              -> MessageBody 'CONNECT
+    ConnAck     :: { returnCode :: Word8 }        -> MessageBody 'CONNACK
     Publish     :: { topic :: Topic
                    -- ^ The 'Topic' to which the message should be published.
                    , pubMsgID :: Maybe MsgID
                    -- ^ 'MsgID' of the message if 'QoS' > 'NoConfirm'.
                    , payload :: ByteString
                    -- ^ The content that will be published.
-                   }                              -> MessageBody PUBLISH
-    PubAck      :: { pubAckMsgID :: MsgID }       -> MessageBody PUBACK
-    PubRec      :: { pubRecMsgID :: MsgID }       -> MessageBody PUBREC
-    PubRel      :: { pubRelMsgID :: MsgID }       -> MessageBody PUBREL
-    PubComp     :: { pubCompMsgID :: MsgID }      -> MessageBody PUBCOMP
+                   }                              -> MessageBody 'PUBLISH
+    PubAck      :: { pubAckMsgID :: MsgID }       -> MessageBody 'PUBACK
+    PubRec      :: { pubRecMsgID :: MsgID }       -> MessageBody 'PUBREC
+    PubRel      :: { pubRelMsgID :: MsgID }       -> MessageBody 'PUBREL
+    PubComp     :: { pubCompMsgID :: MsgID }      -> MessageBody 'PUBCOMP
     Subscribe   :: { subscribeMsgID :: MsgID
                    , subTopics :: [(Topic, QoS)]
                    -- ^ The 'Topic's and corresponding requested 'QoS'.
-                   }                              -> MessageBody SUBSCRIBE
+                   }                              -> MessageBody 'SUBSCRIBE
     SubAck      :: { subAckMsgID :: MsgID
                    , granted :: [QoS]
                    -- ^ The 'QoS' granted for each 'Topic' in the order they were sent
                    -- in the SUBSCRIBE.
-                   }                              -> MessageBody SUBACK
+                   }                              -> MessageBody 'SUBACK
     Unsubscribe :: { unsubMsgID :: MsgID
                    , unsubTopics :: [Topic]
                    -- ^ The 'Topic's from which the client should be unsubscribed.
-                   }                              -> MessageBody UNSUBSCRIBE
-    UnsubAck    :: { unsubAckMsgID :: MsgID }     -> MessageBody UNSUBACK
-    PingReq     ::                                   MessageBody PINGREQ
-    PingResp    ::                                   MessageBody PINGRESP
-    Disconnect  ::                                   MessageBody DISCONNECT
+                   }                              -> MessageBody 'UNSUBSCRIBE
+    UnsubAck    :: { unsubAckMsgID :: MsgID }     -> MessageBody 'UNSUBACK
+    PingReq     ::                                   MessageBody 'PINGREQ
+    PingResp    ::                                   MessageBody 'PINGRESP
+    Disconnect  ::                                   MessageBody 'DISCONNECT
 
 
 -- | The different levels of QoS

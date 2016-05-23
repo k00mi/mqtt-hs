@@ -87,7 +87,7 @@ putBody PingResp           = mempty
 putBody Disconnect         = mempty
 
 
-putConnect :: MessageBody CONNECT -> Builder
+putConnect :: MessageBody 'CONNECT -> Builder
 putConnect Connect{..} = mconcat
     [ putMqttText "MQIsdp" -- protocol
     , word8 3 -- version
@@ -109,11 +109,11 @@ putConnect Connect{..} = mconcat
             shiftL (toBit cleanSession) 1
 
 
-putConnAck :: MessageBody CONNACK -> Builder
+putConnAck :: MessageBody 'CONNACK -> Builder
 putConnAck ConnAck{..} = word8 0 {- reserved -} <> word8 returnCode
 
 
-putPublish :: MessageBody PUBLISH -> Builder
+putPublish :: MessageBody 'PUBLISH -> Builder
 putPublish Publish{..} = mconcat
     [ putTopic topic
     , maybe mempty putMsgID pubMsgID
@@ -121,20 +121,20 @@ putPublish Publish{..} = mconcat
     ]
 
 
-putSubscribe :: MessageBody SUBSCRIBE -> Builder
+putSubscribe :: MessageBody 'SUBSCRIBE -> Builder
 putSubscribe Subscribe{..} = mconcat
     [ putMsgID subscribeMsgID
     , foldMap (\(txt, qos) -> putTopic txt <> word8 (fromQoS qos)) subTopics
     ]
 
 
-putSubAck :: MessageBody SUBACK -> Builder
+putSubAck :: MessageBody 'SUBACK -> Builder
 putSubAck SubAck{..} = mconcat
     [ putMsgID subAckMsgID
     , foldMap (word8 . fromQoS) granted
     ]
 
-putUnsubscribe :: MessageBody UNSUBSCRIBE -> Builder
+putUnsubscribe :: MessageBody 'UNSUBSCRIBE -> Builder
 putUnsubscribe Unsubscribe{..} = mconcat
     [ putMsgID unsubMsgID
     , foldMap putTopic unsubTopics

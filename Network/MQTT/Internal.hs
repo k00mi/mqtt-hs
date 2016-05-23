@@ -124,7 +124,7 @@ data Config
         , cResendTimeout :: Int
         -- ^ Time in microseconds after which messages that have not been but
         -- should be acknowledged are retransmitted.
-        , cPublished :: TChan (Message PUBLISH)
+        , cPublished :: TChan (Message 'PUBLISH)
         -- ^ The channel received 'Publish' messages are written to.
         , cCommands :: Commands
         -- ^ The channel used by 'publish', 'subscribe', etc.
@@ -332,7 +332,7 @@ keepAliveLoop mqtt signal = for_ (cKeepAlive mqtt) $ \tout -> forever $ do
                   SPINGRESP
       Just _ -> return ()
 
-publishHandler :: Config -> Message PUBLISH -> IO ()
+publishHandler :: Config -> Message 'PUBLISH -> IO ()
 publishHandler mqtt msg = do
     case (qos (header msg), pubMsgID (body msg)) of
       (Confirm, Just msgid) -> do
