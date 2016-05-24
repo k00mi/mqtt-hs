@@ -124,7 +124,7 @@ data Config
         , cLogDebug :: String -> IO ()
         -- ^ Function for debug-level logging.
         , cResendTimeout :: Int
-        -- ^ Time in microseconds after which messages that have not been but
+        -- ^ Time in seconds after which messages that have not been but
         -- should be acknowledged are retransmitted.
         , cPublished :: TChan (Message 'PUBLISH)
         -- ^ The channel received 'Publish' messages are written to.
@@ -177,7 +177,9 @@ sendAwait mqtt msg _responseS = do
                     cLogDebug mqtt "No response within timeout, retransmitting..."
                     keepTrying (setDup msg') (tout * 2)
               timeout tout wait >>= maybe retransmit return
-        in keepTrying msg (cResendTimeout mqtt))
+        in keepTrying msg initialTout)
+  where
+    initialTout = secToMicro $ cResendTimeout mqtt
 
 
 -----------------------------------------
