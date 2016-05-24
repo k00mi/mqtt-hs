@@ -1,5 +1,5 @@
 {-# Language OverloadedStrings, GADTs #-}
-module Pubalot where
+module Keepalive where
 
 import Control.Concurrent
 import Control.Concurrent.STM
