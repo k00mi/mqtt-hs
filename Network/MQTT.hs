@@ -32,6 +32,7 @@ module Network.MQTT
   , cLogDebug
   , cPublished
   , cCommands
+  , cInputBufferSize
   -- * Subscribing and publishing
   , subscribe
   , unsubscribe
@@ -71,6 +72,7 @@ defaultConfig commands published = Config
     , cLogDebug         = const $ return ()
     , cCommands         = commands
     , cPublished        = published
+    , cInputBufferSize  = 0x1000
     }
 
 

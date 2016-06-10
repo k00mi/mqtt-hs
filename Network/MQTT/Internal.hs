@@ -130,6 +130,8 @@ data Config
         -- ^ The channel received 'Publish' messages are written to.
         , cCommands :: Commands
         -- ^ The channel used by 'publish', 'subscribe', etc.
+        , cInputBufferSize :: Int
+        -- ^ Maximum number of bytes read from the network at once.
         }
 
 -- | Tell the 'mainLoop' to send the given 'Message'.
@@ -202,9 +204,6 @@ data Input
     | InErr Terminated
     | InCmd Command
 
-inputBufferSize :: Int
-inputBufferSize = 4048
-
 type WaitTerminate = STM ()
 type SendSignal = MVar ()
 
@@ -241,8 +240,7 @@ mainLoop mqtt h waitTerminate sendSignal = do
     handshake :: StateT MqttState IO (Maybe Terminated)
     handshake = do
         doSend msgConnect
-        input <- untilJust
-                  (liftIO (BS.hGetSome h inputBufferSize) >>= parseBytes)
+        input <- untilJust (getSome mqtt h >>= parseBytes)
         case input of
           InErr err -> return $ Just err
           InMsg someMsg -> return $ case someMsg of
@@ -284,7 +282,7 @@ waitForInput mqtt h = do
                   (void $ atomically $ peekTChan cmdChan)
         -- now we have committed to one source and can actually read it
         case input of
-          Left () -> liftIO (BS.hGetSome h inputBufferSize) >>= parseUntilDone
+          Left () -> getSome mqtt h >>= parseUntilDone
           Right () -> InCmd <$> liftIO (atomically (readTChan cmdChan))
       else
         parseUntilDone unconsumed
@@ -351,6 +349,9 @@ publishHandler mqtt msg = do
       _ -> release
   where
     release = writeTChanIO (cPublished mqtt) msg
+
+getSome :: MonadIO m => Config -> Handle -> m ByteString
+getSome mqtt h = liftIO (BS.hGetSome h (cInputBufferSize mqtt))
 
 -- | Runs the 'IO' action in a seperate thread and cancels it if the 'mainLoop'
 -- exits earlier.
