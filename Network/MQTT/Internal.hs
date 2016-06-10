@@ -154,7 +154,7 @@ stopWaiting mqtt = writeCmd mqtt . CmdStopWaiting
 
 -- | Execute the common pattern of sending a message and awaiting
 -- a response in a safe, non-racy way. The message message is retransmitted
--- if no response has been received after 'cResendTimeout' microseconds, with
+-- if no response has been received after 'cResendTimeout' seconds, with
 -- exponential backoff for further retransmissions
 --
 -- An incoming message is considered a response if it is of the
