@@ -14,14 +14,14 @@ Use with care and expected changes.
 module Network.MQTT.Internal
   (
   -- * User interaction
-    Terminated(..)
+    Config(..)
+  , Terminated(..)
   , Command(..)
   , Commands(..)
   , mkCommands
-  , AwaitMessage(..)
-  , Config(..)
   , send
   , await
+  , AwaitMessage(..)
   , stopWaiting
   , sendAwait
   , writeCmd
@@ -79,15 +79,20 @@ data Terminated
     -- ^ 'disconnect' was called
     deriving Show
 
--- | Commands from the user for the library.
+-- | Commands from the user for the 'mainLoop'.
 data Command
     = CmdDisconnect
     | CmdSend SomeMessage
     | CmdAwait AwaitMessage
     | CmdStopWaiting AwaitMessage
 
--- | The communication channel used by 'publish', 'subscribe', etc.
+-- | The communication channel used by 'Network.MQTT.publish',
+-- 'Network.MQTT.subscribe', etc.
 newtype Commands = Cmds { getCmds :: TChan Command }
+-- | Create a new 'Commands' channel.
+--
+-- There should be one channel per MQTT connection. It might be reused by
+-- subsequent connections, but never by multiple connections concurrently.
 mkCommands :: IO Commands
 mkCommands = Cmds <$> newTChanIO
 
@@ -101,6 +106,7 @@ instance Eq AwaitMessage where
       Disproved _ -> False
 
 -- | The various options when establishing a connection.
+-- See below for available accessors.
 data Config
     = Config
         { cHost :: HostName
