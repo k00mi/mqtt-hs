@@ -42,8 +42,6 @@ main = do
               }
 
   _ <- forkIO $ do
-    -- # is a wildcard matching any number of topics
-    -- i.e. we receive messages published on any topic under mqtt/hs and on another/topic
     qosGranted <- MQTT.subscribe conf [(t1, MQTT.Handshake), (t2, MQTT.Handshake)]
     case qosGranted of
       [MQTT.Handshake, MQTT.Handshake] -> forever $ atomically (readTChan pubChan) >>= handleMsg
