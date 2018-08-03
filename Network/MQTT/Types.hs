@@ -7,7 +7,8 @@
              TypeFamilies,
              ScopedTypeVariables,
              RankNTypes,
-             TemplateHaskell
+             TemplateHaskell,
+             EmptyCase
              #-}
 
 -- without -O0 GHC 7.6.3 loops while building, probably related to
