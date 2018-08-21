@@ -17,6 +17,7 @@ description:
 
     See the 'Network.MQTT' module for documentation and the project repository
     for some <https://github.com/k00mi/mqtt-hs/blob/master/examples examples>.
+tested-with:         GHC==8.6.1, GHC==8.4.1, GHC==8.2.2, GHC==8.0.2
 
 
 library
